@@ -43,7 +43,7 @@ public class Main
      */
     public static void main(String[] args)
     {
-        logger.info("Starting Jicofo.");
+        logger.info("[Gracetech] Starting Jicofo.");
 
         Thread.setDefaultUncaughtExceptionHandler((t, e) ->
                 logger.error("An uncaught exception occurred in thread=" + t, e));
