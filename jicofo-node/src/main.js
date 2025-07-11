@@ -41,7 +41,8 @@ async function main() {
     } else {
         // Check if a default critical config is missing (example)
         try {
-            getConfig('someCriticalSetting'); // Example check
+            const xmppService = getConfig('xmpp.client.service'); // Example check
+            logger.info(`xmppService config value: "${xmppService}"`);
         } catch (e) {
             // In Java: logger.warn("Required property config.file is missing. Set with -Dconfig.file="); return;
             // The 'config' library will throw an error if a default.json (or env specific) is not found in /config.
