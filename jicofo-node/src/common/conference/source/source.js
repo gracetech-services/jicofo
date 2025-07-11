@@ -1,7 +1,7 @@
 const MediaType = require('./mediaType');
 const { VideoType, parseVideoType } = require('./videoType');
 const { xml } = require('@xmpp/xml');
-const { JidUtils } = require('../../../config/serviceConfigs'); // For JidCreate.from equivalent if owner is JID like
+const { JidUtils } = require('../../config/serviceConfigs'); // For JidCreate.from equivalent if owner is JID like
 
 /**
  * Represents a single media source (SSRC).

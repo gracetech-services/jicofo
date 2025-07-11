@@ -1,6 +1,6 @@
 const { xml, Element } = require('@xmpp/xml');
 const loggerModule = require('../../../utils/logger');
-const ConferenceSourceMap = require('../../conference/source/conferenceSourceMap'); // Import actual
+const ConferenceSourceMap = require('../conference/source/conferenceSourceMap'); // Import actual
 const { createSessionInitiate, createTransportReplace, createBundleGroupExtension } = require('./jingleUtils'); // Import createBundleGroupExtension
 // const JingleStats = { stanzaReceived: () => {}, stanzaSent: () => {} }; // Placeholder
 const { JingleReason, JINGLE_REASON_ERRORS_NS, JINGLE_REASON_NORMAL_NS } = require('./jingleReason');
