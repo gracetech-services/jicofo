@@ -1,17 +1,17 @@
 const logger = require('./utils/logger');
-const jicofoConfig = require('../config'); // Import the main config accessor
-const FocusManager = require('../conference/focusManager');
-const { XmppDomainAuthAuthority, ExternalJWTAuthority } = require('../auth/authService');
-const { XmppServices, initializeSmack } = require('../xmpp/xmppServices');
-const BridgeSelector = require('../bridge/bridgeSelector');
-const JvbDoctor = require('../bridge/jvbDoctor');
-const BridgeMucDetector = require('../bridge/bridgeMucDetector');
-const { JibriDetector, JibriDetectorMetrics } = require('../jibri/jibriDetector');
-const JicofoHealthChecker = require('../health/healthChecker');
-const ApiService = require('../api/index'); // Ktor equivalent
-const { JicofoMetricsContainer, GlobalMetrics } = require('../metrics/metricsContainer');
-const { AuthConfig, BridgeConfig, JibriConfig, HealthConfig, RestConfig, JidUtils } = require('../config/serviceConfigs');
-const BridgeMucDetectorReal = require('../selector/bridge/bridgeMucDetector'); // Renamed to avoid conflict with property name
+const jicofoConfig = require('./config'); // Import the main config accessor
+const FocusManager = require('./conference/focusManager');
+const { XmppDomainAuthAuthority, ExternalJWTAuthority } = require('./auth/authService');
+const { XmppServices, initializeSmack } = require('./xmpp/xmppServices');
+const BridgeSelector = require('./bridge/bridgeSelector');
+const JvbDoctor = require('./bridge/jvbDoctor');
+const BridgeMucDetector = require('./bridge/bridgeMucDetector');
+const { JibriDetector, JibriDetectorMetrics } = require('./jibri/jibriDetector');
+const JicofoHealthChecker = require('./health/healthChecker');
+const ApiService = require('./api/index'); // Ktor equivalent
+const { JicofoMetricsContainer, GlobalMetrics } = require('./metrics/metricsContainer');
+const { AuthConfig, BridgeConfig, JibriConfig, HealthConfig, RestConfig, JidUtils } = require('./config/serviceConfigs');
+const BridgeMucDetectorReal = require('./selector/bridge/bridgeMucDetector'); // Renamed to avoid conflict with property name
 
 // TODO: CurrentVersionImpl equivalent for versioning
 const CurrentVersionImpl = { VERSION: '0.0.1-node' };
