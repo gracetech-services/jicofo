@@ -32,6 +32,8 @@ class ManagedXmppConnection extends EventEmitter {
             password: this.config.password,
         });
 
+        this._initializeIqProcessing(); // Call it here
+
         this.xmpp.on('error', (err) => {
             logger.error(`XMPP Error (${this.name}):`, err.message || err.toString());
             // Additional error details if available (e.g., err.stanza)
@@ -378,21 +380,6 @@ class ManagedXmppConnection extends EventEmitter {
             }
         });
         logger.info(`XMPP Connection "${this.name}": Initialized IQ processing.`);
-    }
-    // Make sure to call _initializeIqProcessing after xmpp client is set up, e.g. in connect()
-    async connect() {
-        // ... (existing connect code) ...
-        this.xmpp = client({ /* ... */ });
-
-        // ... (existing event handlers for error, offline, online) ...
-
-        this._initializeIqProcessing(); // Call it here
-
-        try {
-            await this.xmpp.start();
-        } catch (err) {
-            // ... (existing error handling) ...
-        }
     }
 }
 
