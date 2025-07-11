@@ -62,8 +62,6 @@ class ManagedXmppConnection extends EventEmitter {
         //    logger.debug(`XMPP SEND (${this.name}): ${stanza.toString()}`);
         // });
 
-        this._initializeIqProcessing(); // Initialize IQ processing handlers
-
         try {
             await this.xmpp.start();
         } catch (err) {
@@ -381,6 +379,21 @@ class ManagedXmppConnection extends EventEmitter {
         });
         logger.info(`XMPP Connection "${this.name}": Initialized IQ processing.`);
     }
+    // Make sure to call _initializeIqProcessing after xmpp client is set up, e.g. in connect()
+    async connect() {
+        // ... (existing connect code) ...
+        this.xmpp = client({ /* ... */ });
+
+        // ... (existing event handlers for error, offline, online) ...
+
+        this._initializeIqProcessing(); // Call it here
+
+        try {
+            await this.xmpp.start();
+        } catch (err) {
+            // ... (existing error handling) ...
+        }
+    }
 }
 
 class XmppServices {
@@ -605,100 +618,7 @@ class JingleHandler {
 }
 
 
-class XmppServices {
-    constructor({ conferenceStore, focusManager, authenticationAuthority }) {
-        logger.info('XmppServices initializing...');
-        this.conferenceStore = conferenceStore;
-        this.focusManager = focusManager;
-        this.authenticationAuthority = authenticationAuthority;
 
-        const xmppConfig = require('../config').getConfig('xmpp') || {};
-
-        this.clientConnectionConfig = xmppConfig.client;
-        this.serviceConnectionConfig = xmppConfig.service;
-
-        if (!this.clientConnectionConfig || !this.clientConnectionConfig.service) {
-            logger.error("XMPP client connection configuration (xmpp.client) is missing or incomplete in config!");
-            this.clientConnection = new ManagedXmppConnection('client_unconfigured', {});
-        } else {
-            this.clientConnection = new ManagedXmppConnection('client', this.clientConnectionConfig);
-        }
-
-        if (!this.serviceConnectionConfig || !this.serviceConnectionConfig.service) {
-            logger.warn("XMPP service connection configuration (xmpp.service) is missing or incomplete.");
-            this.serviceConnection = new ManagedXmppConnection('service_unconfigured', {});
-        } else {
-            this.serviceConnection = new ManagedXmppConnection('service', this.serviceConnectionConfig);
-        }
-
-        // Initialize Jingle Handler for the client connection (most Jingle happens here)
-        // It automatically registers itself for 'urn:xmpp:jingle:1' IQs on this connection.
-        if (this.clientConnectionConfig?.service) {
-            this.jingleHandler = new JingleHandler(this.clientConnection, logger);
-        } else {
-            this.jingleHandler = null; // Or a dummy handler
-            logger.warn('JingleHandler not initialized for client connection due to missing config.');
-        }
-        // If Jingle can also occur on the service connection, another JingleHandler instance would be needed for it.
-
-        this.conferenceIqHandler = { debugState: {}, handleConferenceIq: async (iq) => {} };
-        this.avModerationHandler = { debugState: {} };
-        this.jigasiDetector = null;
-        this.jigasiStats = {};
-
-        logger.info('XmppServices initialized.');
-    }
-
-    async startConnections() {
-        logger.info('XmppServices: Starting XMPP connections...');
-        try {
-            if (this.clientConnectionConfig?.service) {
-                await this.clientConnection.connect();
-            } else {
-                 logger.warn('XMPP client connection not started due to missing configuration.');
-            }
-            if (this.serviceConnectionConfig?.service) {
-                await this.serviceConnection.connect();
-            } else {
-                 logger.warn('XMPP service connection not started due to missing configuration.');
-            }
-            logger.info('XMPP connections initiated.');
-        } catch (error) {
-            logger.error('XmppServices: Error starting XMPP connections:', error);
-            throw error;
-        }
-    }
-
-
-    getXmppConnectionByName(name) {
-        logger.debug(`XmppServices getXmppConnectionByName: ${name}`);
-        if (name === this.serviceConnection.name && this.serviceConnectionConfig?.service) {
-            return this.serviceConnection;
-        }
-        if (name === this.clientConnection.name && this.clientConnectionConfig?.service) {
-            return this.clientConnection;
-        }
-        logger.warn(`Requested XMPP connection "${name}" not found or not configured, defaulting to client connection if available.`);
-        return this.clientConnectionConfig?.service ? this.clientConnection : null;
-    }
-
-    async shutdown() {
-        logger.info('XmppServices shutting down XMPP connections...');
-        // Unregister Jingle handler? If it holds resources or listeners on connection.
-        // For now, its main listener is on ManagedXmppConnection, which will be stopped.
-        try {
-            await this.clientConnection.disconnect();
-        } catch (e) {
-            logger.error("Error disconnecting client XMPP connection:", e);
-        }
-        try {
-            await this.serviceConnection.disconnect();
-        } catch (e) {
-            logger.error("Error disconnecting service XMPP connection:", e);
-        }
-        logger.info('XMPP connections shut down.');
-    }
-}
 
 // `initializeSmack()` is not directly applicable to `@xmpp/client` as setup is per-instance.
 function initializeSmack() {
