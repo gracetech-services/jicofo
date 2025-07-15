@@ -1089,3 +1089,62 @@ describe('Conference Integration Test', () => {
         require('../src/xmpp/muc/chatRoom').ChatRoom = realChatRoom;
     });
 });
+
+// AV Moderation integration test
+const request = require('supertest');
+const app = require('../src/api/index'); // Adjust if needed to get the Express app
+const conferenceStore = require('../src/common/conferenceStore');
+
+describe('AV Moderation Integration', () => {
+    const room = 'testroom@example.com';
+
+    beforeEach(() => {
+        // Reset conference state
+        conferenceStore.createConference(room, {});
+    });
+
+    it('should enable AV moderation via REST and reflect in debug endpoint', async () => {
+        // Enable audio moderation
+        await request(app.app)
+            .post('/av-moderation')
+            .send({ room, mediaType: 'audio', enabled: true, whitelist: ['mod1'] })
+            .expect(200);
+        // Check debug endpoint
+        const res = await request(app.app)
+            .get(`/debug/conference/${encodeURIComponent(room)}`)
+            .expect(200);
+        expect(res.body.avModeration.audio.enabled).toBe(true);
+        expect(res.body.avModeration.audio.whitelist).toContain('mod1');
+    });
+
+    it('should disable AV moderation via REST', async () => {
+        // Disable video moderation
+        await request(app.app)
+            .post('/av-moderation')
+            .send({ room, mediaType: 'video', enabled: false })
+            .expect(200);
+        // Check debug endpoint
+        const res = await request(app.app)
+            .get(`/debug/conference/${encodeURIComponent(room)}`)
+            .expect(200);
+        expect(res.body.avModeration.video.enabled).toBe(false);
+    });
+
+    it('should set whitelist via REST', async () => {
+        await request(app.app)
+            .post('/av-moderation')
+            .send({ room, mediaType: 'audio', whitelist: ['mod2', 'mod3'] })
+            .expect(200);
+        const res = await request(app.app)
+            .get(`/debug/conference/${encodeURIComponent(room)}`)
+            .expect(200);
+        expect(res.body.avModeration.audio.whitelist).toEqual(['mod2', 'mod3']);
+    });
+
+    // Placeholder for XMPP message simulation test
+    it('should handle AV moderation XMPP message (simulation placeholder)', () => {
+        // TODO: Simulate XMPP message and verify state
+        // This would require a mock or test XMPP client
+        expect(true).toBe(true);
+    });
+});

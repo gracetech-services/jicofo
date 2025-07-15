@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const { client, xml } = require('@xmpp/client'); // Using @xmpp/client
 const EventEmitter = require('events');
+const conferenceStore = require('../common/conferenceStore');
 
 // Wrapper for @xmpp/client to somewhat mimic the XmppConnection interface used elsewhere
 // and to manage Jicofo-specific needs like listeners for registration changes.
@@ -54,6 +55,8 @@ class ManagedXmppConnection extends EventEmitter {
             // Send initial presence or other setup if needed
             await this.xmpp.send(xml('presence'));
             this._updateRegistrationStatus(true);
+            // Setup AV moderation XMPP message handler
+            setupAvModerationHandler(this, conferenceStore);
         });
 
         // Debugging raw stanzas (optional)
@@ -610,6 +613,44 @@ class JingleHandler {
 // `initializeSmack()` is not directly applicable to `@xmpp/client` as setup is per-instance.
 function initializeSmack() {
     logger.info('initializeSmack: (No-op for @xmpp/client, setup is per-connection instance)');
+}
+
+// AV Moderation XMPP message handler
+function setupAvModerationHandler(xmppConnection, conferenceStore) {
+    if (!xmppConnection || !xmppConnection.xmpp) return;
+    xmppConnection.xmpp.on('stanza', async (stanza) => {
+        if (!stanza.is('message')) return;
+        const type = stanza.attrs.type;
+        if (type !== 'groupchat' && type !== 'normal') return;
+        // Look for a <json-message> extension (Jitsi style)
+        const jsonMessageEl = stanza.getChild('json-message', 'http://jitsi.org/jitmeet');
+        if (!jsonMessageEl) return;
+        let json;
+        try {
+            json = JSON.parse(jsonMessageEl.text());
+        } catch (e) {
+            logger.warn('Failed to parse json-message:', e);
+            return;
+        }
+        if (json.type !== 'av_moderation') return;
+        const room = json.room;
+        if (!room) {
+            logger.warn('av_moderation message missing room');
+            return;
+        }
+        // Enable/disable moderation
+        if (typeof json.enabled === 'boolean' && json.mediaType) {
+            conferenceStore.setAvModerationEnabled(room, json.mediaType, json.enabled);
+            logger.info(`AV moderation for ${json.mediaType} in ${room} set to ${json.enabled}`);
+        }
+        // Set whitelist
+        if (json.whitelists && typeof json.whitelists === 'object') {
+            for (const [mediaType, whitelist] of Object.entries(json.whitelists)) {
+                conferenceStore.setAvModerationWhitelist(room, mediaType, whitelist);
+                logger.info(`AV moderation whitelist for ${mediaType} in ${room} set to: ${JSON.stringify(whitelist)}`);
+            }
+        }
+    });
 }
 
 module.exports = {
