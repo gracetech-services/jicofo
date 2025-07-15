@@ -1,7 +1,5 @@
 const Conference = require('./conference');
 
-jest.mock('uuid', () => ({ v4: () => 'mock-uuid' }));
-
 describe('Conference', () => {
     let conference;
     let xmppClient;

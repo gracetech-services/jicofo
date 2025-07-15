@@ -1,16 +1,4 @@
 const AvModeration = require('./avModeration');
-const xmpp = require('node-xmpp-client');
-
-jest.mock('node-xmpp-client', () => {
-    return {
-        Stanza: jest.fn().mockImplementation((name, attrs) => {
-            return {
-                c: jest.fn().mockReturnThis(),
-                t: jest.fn().mockReturnThis(),
-            };
-        }),
-    };
-});
 
 describe('AvModeration', () => {
     let avModeration;
