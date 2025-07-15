@@ -152,11 +152,15 @@ class ApiService {
 
         // --- /debug and subroutes ---
         this.app.get('/debug', (req, res) => {
-            // Return a summary of all conferences
+            // Return a summary of all conferences, including AV moderation state
             const conferences = conferenceStore.getAllConferences();
             res.json({
                 conferenceCount: conferences.length,
-                conferences: conferences.map(conf => ({ room: conf.room, properties: conf.properties }))
+                conferences: conferences.map(conf => ({
+                    room: conf.room,
+                    properties: conf.properties,
+                    avModeration: conf.avModeration // Expose AV moderation state
+                }))
             });
         });
         this.app.get('/debug/conferences', (req, res) => {
@@ -174,12 +178,15 @@ class ApiService {
             res.json(result);
         });
         this.app.get('/debug/conference/:conference', (req, res) => {
-            // Return debugState for a specific conference
+            // Return debugState and AV moderation for a specific conference
             const conf = conferenceStore.getConference(req.params.conference);
             if (!conf) {
                 return res.status(404).json({ error: 'Conference not found' });
             }
-            res.json(conf.debugState || {});
+            res.json({
+                debugState: conf.debugState || {},
+                avModeration: conf.avModeration // Expose AV moderation state
+            });
         });
         this.app.get('/debug/xmpp-caps', (req, res) => {
             // Return static placeholder for XMPP caps stats
@@ -214,6 +221,34 @@ class ApiService {
                 logger.error("Error getting health status:", error);
                 res.status(500).json({ error: "Failed to retrieve health status" });
             }
+        });
+
+        // --- /av-moderation REST endpoint ---
+        this.app.post('/av-moderation', express.json(), (req, res) => {
+            // Enable/disable AV moderation and set whitelist
+            const { room, mediaType, enabled, whitelist } = req.body || {};
+            if (!room || !['audio', 'video'].includes(mediaType)) {
+                return res.status(400).json({ error: 'Missing or invalid room or mediaType' });
+            }
+            if (typeof enabled === 'boolean') {
+                conferenceStore.setAvModerationEnabled(room, mediaType, enabled);
+            }
+            if (Array.isArray(whitelist)) {
+                conferenceStore.setAvModerationWhitelist(room, mediaType, whitelist);
+            }
+            res.json({ avModeration: conferenceStore.getAvModerationState(room) });
+        });
+        this.app.get('/av-moderation', (req, res) => {
+            // Get AV moderation state for a room
+            const { room } = req.query;
+            if (!room) {
+                return res.status(400).json({ error: 'Missing room parameter' });
+            }
+            const state = conferenceStore.getAvModerationState(room);
+            if (!state) {
+                return res.status(404).json({ error: 'Conference not found' });
+            }
+            res.json({ avModeration: state });
         });
     }
 
