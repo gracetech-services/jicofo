@@ -57,6 +57,26 @@ class ManagedXmppConnection extends EventEmitter {
             this._updateRegistrationStatus(true);
             // Setup AV moderation XMPP message handler
             setupAvModerationHandler(this, conferenceStore);
+            // Setup participant join/leave logic via presence
+            this.addPresenceListener((stanza) => {
+                // Only handle MUC presence
+                const to = stanza.attrs.to || '';
+                const from = stanza.attrs.from || '';
+                // MUC JID format: room@conference.example.com/nick
+                const mucMatch = to.match(/^([^/]+)\/([^/]+)$/);
+                if (!mucMatch) return;
+                const room = mucMatch[1];
+                const nick = mucMatch[2];
+                // Determine join/leave
+                if (stanza.attrs.type === 'unavailable') {
+                    conferenceStore.removeParticipant(room, nick);
+                    logger.info(`Participant left: ${nick} from ${room}`);
+                } else {
+                    // For demo, treat all as non-moderator
+                    conferenceStore.addParticipant(room, { id: nick, isModerator: false, isMuted: {} });
+                    logger.info(`Participant joined: ${nick} to ${room}`);
+                }
+            });
         });
 
         // Debugging raw stanzas (optional)

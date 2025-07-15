@@ -150,16 +150,36 @@ class ApiService {
             res.json({ movedEndpoints: 0, conferences: 0 });
         });
 
+        // --- Participant join/leave endpoints (for demo/testing) ---
+        this.app.post('/conference/:room/participant', express.json(), (req, res) => {
+            // Add a participant to a conference
+            const room = req.params.room;
+            const { id, isModerator } = req.body || {};
+            if (!id) return res.status(400).json({ error: 'Missing participant id' });
+            conferenceStore.addParticipant(room, { id, isModerator: !!isModerator, isMuted: {} });
+            res.json({ ok: true });
+        });
+        this.app.delete('/conference/:room/participant', express.json(), (req, res) => {
+            // Remove a participant from a conference
+            const room = req.params.room;
+            const { id } = req.body || {};
+            if (!id) return res.status(400).json({ error: 'Missing participant id' });
+            conferenceStore.removeParticipant(room, id);
+            res.json({ ok: true });
+        });
+
         // --- /debug and subroutes ---
         this.app.get('/debug', (req, res) => {
-            // Return a summary of all conferences, including AV moderation state
+            // Return a summary of all conferences, including AV moderation state and expiration info
             const conferences = conferenceStore.getAllConferences();
             res.json({
                 conferenceCount: conferences.length,
                 conferences: conferences.map(conf => ({
                     room: conf.room,
                     properties: conf.properties,
-                    avModeration: conf.avModeration // Expose AV moderation state
+                    avModeration: conf.avModeration,
+                    stoppedAt: conf.stoppedAt,
+                    stopReason: conf.stopReason
                 }))
             });
         });
@@ -178,14 +198,16 @@ class ApiService {
             res.json(result);
         });
         this.app.get('/debug/conference/:conference', (req, res) => {
-            // Return debugState and AV moderation for a specific conference
+            // Return debugState, AV moderation, and expiration info for a specific conference
             const conf = conferenceStore.getConference(req.params.conference);
             if (!conf) {
                 return res.status(404).json({ error: 'Conference not found' });
             }
             res.json({
                 debugState: conf.debugState || {},
-                avModeration: conf.avModeration // Expose AV moderation state
+                avModeration: conf.avModeration,
+                stoppedAt: conf.stoppedAt,
+                stopReason: conf.stopReason
             });
         });
         this.app.get('/debug/xmpp-caps', (req, res) => {
