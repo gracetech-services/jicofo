@@ -6,13 +6,16 @@ const conferenceStore = require('../common/conferenceStore');
 // Wrapper for @xmpp/client to somewhat mimic the XmppConnection interface used elsewhere
 // and to manage Jicofo-specific needs like listeners for registration changes.
 class ManagedXmppConnection extends EventEmitter {
-    constructor(name, connectionConfig) {
+    constructor(name, connectionConfig, { conferenceStore, authenticationAuthority, jigasiDetector } = {}) {
         super();
         this.name = name;
         this.config = connectionConfig; // { service, domain, username, password, resource }
         this.xmpp = null; // This will hold the @xmpp/client instance
         this.listeners = []; // For Jicofo-specific listeners (e.g., FocusManager for registration)
         this.isRegistered = false; // Track XMPP registration status
+        this.conferenceStore = conferenceStore;
+        this.authenticationAuthority = authenticationAuthority;
+        this.jigasiDetector = jigasiDetector;
 
         logger.info(`ManagedXmppConnection "${name}" created with config (password hidden).`);
     }
@@ -56,7 +59,13 @@ class ManagedXmppConnection extends EventEmitter {
             await this.xmpp.send(xml('presence'));
             this._updateRegistrationStatus(true);
             // Setup AV moderation XMPP message handler
-            setupAvModerationHandler(this, conferenceStore);
+            setupAvModerationHandler(this, this.conferenceStore);
+            setupConferenceIqHandler(this, this.conferenceStore);
+            // Setup additional IQ handlers
+            setupAuthenticationIqHandler(this, this.authenticationAuthority);
+            setupMuteIqHandlers(this, this.conferenceStore);
+            setupJibriIqHandler(this, this.conferenceStore);
+            setupJigasiIqHandler(this, this.conferenceStore, this.jigasiDetector);
             // Setup participant join/leave logic via presence
             this.addPresenceListener((stanza) => {
                 // Only handle MUC presence
@@ -69,11 +78,11 @@ class ManagedXmppConnection extends EventEmitter {
                 const nick = mucMatch[2];
                 // Determine join/leave
                 if (stanza.attrs.type === 'unavailable') {
-                    conferenceStore.removeParticipant(room, nick);
+                    this.conferenceStore.removeParticipant(room, nick);
                     logger.info(`Participant left: ${nick} from ${room}`);
                 } else {
                     // For demo, treat all as non-moderator
-                    conferenceStore.addParticipant(room, { id: nick, isModerator: false, isMuted: {} });
+                    this.conferenceStore.addParticipant(room, { id: nick, isModerator: false, isMuted: {} });
                     logger.info(`Participant joined: ${nick} to ${room}`);
                 }
             });
@@ -407,11 +416,12 @@ class ManagedXmppConnection extends EventEmitter {
 }
 
 class XmppServices {
-    constructor({ conferenceStore, focusManager, authenticationAuthority }) {
+    constructor({ conferenceStore, focusManager, authenticationAuthority, jigasiDetector }) {
         logger.info('XmppServices initializing...');
         this.conferenceStore = conferenceStore;
         this.focusManager = focusManager;
         this.authenticationAuthority = authenticationAuthority;
+        this.jigasiDetector = jigasiDetector;
 
         // Retrieve XMPP connection configurations from the main config
         // Assumes config structure like:
@@ -427,17 +437,33 @@ class XmppServices {
         if (!this.clientConnectionConfig || !this.clientConnectionConfig.service) {
             logger.error("XMPP client connection configuration (xmpp.client) is missing or incomplete in config!");
             // Potentially throw an error or operate in a degraded mode
-            this.clientConnection = new ManagedXmppConnection('client_unconfigured', {}); // Dummy
+            this.clientConnection = new ManagedXmppConnection('client_unconfigured', {}, {
+                conferenceStore: this.conferenceStore,
+                authenticationAuthority: this.authenticationAuthority,
+                jigasiDetector: this.jigasiDetector
+            }); // Dummy
         } else {
-            this.clientConnection = new ManagedXmppConnection('client', this.clientConnectionConfig);
+            this.clientConnection = new ManagedXmppConnection('client', this.clientConnectionConfig, {
+                conferenceStore: this.conferenceStore,
+                authenticationAuthority: this.authenticationAuthority,
+                jigasiDetector: this.jigasiDetector
+            });
         }
 
         if (!this.serviceConnectionConfig || !this.serviceConnectionConfig.service) {
             logger.warn("XMPP service connection configuration (xmpp.service) is missing or incomplete. May not be used by all features.");
             // This one might be optional depending on features used (e.g. JvbDoctor)
-            this.serviceConnection = new ManagedXmppConnection('service_unconfigured', {}); // Dummy
+            this.serviceConnection = new ManagedXmppConnection('service_unconfigured', {}, {
+                conferenceStore: this.conferenceStore,
+                authenticationAuthority: this.authenticationAuthority,
+                jigasiDetector: this.jigasiDetector
+            }); // Dummy
         } else {
-            this.serviceConnection = new ManagedXmppConnection('service', this.serviceConnectionConfig);
+            this.serviceConnection = new ManagedXmppConnection('service', this.serviceConnectionConfig, {
+                conferenceStore: this.conferenceStore,
+                authenticationAuthority: this.authenticationAuthority,
+                jigasiDetector: this.jigasiDetector
+            });
         }
 
         // TODO: Connect the XMPP clients. This could be done here, or in JicofoServices.start()
@@ -671,6 +697,423 @@ function setupAvModerationHandler(xmppConnection, conferenceStore) {
             }
         }
     });
+}
+
+// Register Conference IQ handler (focus)
+function setupConferenceIqHandler(xmppConnection, conferenceStore) {
+    // Only register if xmppConnection supports IQ handlers
+    if (!xmppConnection.registerIqHandler) return;
+    xmppConnection.registerIqHandler('conference', 'http://jitsi.org/protocol/focus', async (iq) => {
+        // Parse room from IQ
+        const query = iq.getChild('conference', 'http://jitsi.org/protocol/focus');
+        const room = query && query.attrs && query.attrs.room;
+        if (!room) {
+            // Return error IQ (bad-request)
+            return xmppConnection.xmpp.stanza('iq', {
+                type: 'error',
+                to: iq.attrs.from,
+                id: iq.attrs.id
+            },
+                xmppConnection.xmpp.stanza('conference', { xmlns: 'http://jitsi.org/protocol/focus' }),
+                xmppConnection.xmpp.stanza('error', { type: 'modify' },
+                    xmppConnection.xmpp.stanza('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        // Create or get the conference
+        conferenceStore.createConference(room, {});
+        // Respond with a result IQ (minimal for now)
+        return xmppConnection.xmpp.stanza('iq', {
+            type: 'result',
+            to: iq.attrs.from,
+            id: iq.attrs.id
+        },
+            xmppConnection.xmpp.stanza('conference', { xmlns: 'http://jitsi.org/protocol/focus', room })
+        );
+    });
+}
+
+// Register Authentication IQ handlers
+function setupAuthenticationIqHandler(xmppConnection, authenticationAuthority) {
+    if (!xmppConnection.registerIqHandler || !authenticationAuthority) return;
+    
+    // Login URL IQ handler
+    xmppConnection.registerIqHandler('login-url', 'http://jitsi.org/protocol/focus', async (iq) => {
+        const loginUrlEl = iq.getChild('login-url', 'http://jitsi.org/protocol/focus');
+        if (!loginUrlEl) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'modify' },
+                    xml('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        const room = loginUrlEl.attrs.room;
+        const machineUID = loginUrlEl.attrs.machineUID;
+        const popup = loginUrlEl.attrs.popup === 'true';
+        
+        if (!machineUID) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'modify' },
+                    xml('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        try {
+            const url = authenticationAuthority.createLoginUrl(machineUID, iq.attrs.from, room, popup);
+            return xml('iq', { type: 'result', to: iq.attrs.from, id: iq.attrs.id },
+                xml('login-url', { xmlns: 'http://jitsi.org/protocol/focus', url })
+            );
+        } catch (error) {
+            logger.error('Failed to create login URL:', error);
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('internal-server-error', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+    });
+    
+    // Logout IQ handler
+    xmppConnection.registerIqHandler('logout', 'http://jitsi.org/protocol/focus', async (iq) => {
+        const logoutEl = iq.getChild('logout', 'http://jitsi.org/protocol/focus');
+        if (!logoutEl) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'modify' },
+                    xml('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        try {
+            const result = authenticationAuthority.processLogoutIq(iq);
+            return result;
+        } catch (error) {
+            logger.error('Failed to process logout IQ:', error);
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('internal-server-error', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+    });
+}
+
+// Register Mute IQ handlers
+function setupMuteIqHandlers(xmppConnection, conferenceStore) {
+    if (!xmppConnection.registerIqHandler) return;
+    
+    // Audio mute handler
+    xmppConnection.registerIqHandler('mute', 'http://jitsi.org/protocol/focus', async (iq) => {
+        const muteEl = iq.getChild('mute', 'http://jitsi.org/protocol/focus');
+        if (!muteEl) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'modify' },
+                    xml('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        const doMute = muteEl.attrs.mute === 'true';
+        const jidToMute = muteEl.attrs.jid;
+        
+        if (doMute === null || !jidToMute) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'modify' },
+                    xml('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        const conference = conferenceStore.getConference(iq.attrs.from);
+        if (!conference) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('item-not-found', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        try {
+            const result = conference.handleMuteRequest(iq.attrs.from, jidToMute, doMute, 'audio');
+            if (result === 'SUCCESS') {
+                // Send success response
+                const response = xml('iq', { type: 'result', to: iq.attrs.from, id: iq.attrs.id });
+                
+                // If this was a remote mute, notify the participant that was muted
+                if (iq.attrs.from !== jidToMute) {
+                    const notifyIq = xml('iq', { type: 'set', to: jidToMute },
+                        xml('mute', { xmlns: 'http://jitsi.org/protocol/focus', mute: doMute.toString(), actor: iq.attrs.from })
+                    );
+                    xmppConnection.send(notifyIq);
+                }
+                
+                return response;
+            } else if (result === 'NOT_ALLOWED') {
+                return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                    xml('error', { type: 'cancel' },
+                        xml('not-allowed', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                    )
+                );
+            } else {
+                return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                    xml('error', { type: 'cancel' },
+                        xml('internal-server-error', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                    )
+                );
+            }
+        } catch (error) {
+            logger.error('Failed to handle mute request:', error);
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('internal-server-error', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+    });
+    
+    // Video mute handler
+    xmppConnection.registerIqHandler('mute-video', 'http://jitsi.org/protocol/focus', async (iq) => {
+        const muteEl = iq.getChild('mute-video', 'http://jitsi.org/protocol/focus');
+        if (!muteEl) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'modify' },
+                    xml('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        const doMute = muteEl.attrs.mute === 'true';
+        const jidToMute = muteEl.attrs.jid;
+        
+        if (doMute === null || !jidToMute) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'modify' },
+                    xml('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        const conference = conferenceStore.getConference(iq.attrs.from);
+        if (!conference) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('item-not-found', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        try {
+            const result = conference.handleMuteRequest(iq.attrs.from, jidToMute, doMute, 'video');
+            if (result === 'SUCCESS') {
+                // Send success response
+                const response = xml('iq', { type: 'result', to: iq.attrs.from, id: iq.attrs.id });
+                
+                // If this was a remote mute, notify the participant that was muted
+                if (iq.attrs.from !== jidToMute) {
+                    const notifyIq = xml('iq', { type: 'set', to: jidToMute },
+                        xml('mute-video', { xmlns: 'http://jitsi.org/protocol/focus', mute: doMute.toString(), actor: iq.attrs.from })
+                    );
+                    xmppConnection.send(notifyIq);
+                }
+                
+                return response;
+            } else if (result === 'NOT_ALLOWED') {
+                return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                    xml('error', { type: 'cancel' },
+                        xml('not-allowed', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                    )
+                );
+            } else {
+                return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                    xml('error', { type: 'cancel' },
+                        xml('internal-server-error', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                    )
+                );
+            }
+        } catch (error) {
+            logger.error('Failed to handle video mute request:', error);
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('internal-server-error', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+    });
+}
+
+// Register Jibri IQ handler
+function setupJibriIqHandler(xmppConnection, conferenceStore) {
+    if (!xmppConnection.registerIqHandler) return;
+    
+    xmppConnection.registerIqHandler('jibri', 'http://jitsi.org/protocol/jibri', async (iq) => {
+        const jibriEl = iq.getChild('jibri', 'http://jitsi.org/protocol/jibri');
+        if (!jibriEl) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'modify' },
+                    xml('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        // Find the conference that can handle this Jibri request
+        const conferences = conferenceStore.getAllConferences();
+        for (const conference of conferences) {
+            try {
+                const result = conference.handleJibriRequest(iq);
+                if (result && result.accepted) {
+                    return result.response;
+                }
+            } catch (error) {
+                logger.error('Error handling Jibri request in conference:', error);
+            }
+        }
+        
+        // No conference accepted the request
+        logger.warn('Jibri IQ not accepted by any conference');
+        return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+            xml('error', { type: 'cancel' },
+                xml('item-not-found', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+            )
+        );
+    });
+}
+
+// Register Jigasi IQ handler
+function setupJigasiIqHandler(xmppConnection, conferenceStore, jigasiDetector) {
+    if (!xmppConnection.registerIqHandler || !jigasiDetector) return;
+    
+    xmppConnection.registerIqHandler('dial', 'urn:xmpp:rayo:1', async (iq) => {
+        const dialEl = iq.getChild('dial', 'urn:xmpp:rayo:1');
+        if (!dialEl) {
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'modify' },
+                    xml('bad-request', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        const conferenceJid = iq.attrs.from;
+        const conference = conferenceStore.getConference(conferenceJid) || 
+                         conferenceStore.getAllConferences().find(c => c.visitorRoomsJids && c.visitorRoomsJids.includes(conferenceJid));
+        
+        if (!conference) {
+            logger.warn('Rejected Jigasi request for non-existent conference:', conferenceJid);
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('item-not-found', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        if (!conference.acceptJigasiRequest(iq.attrs.from)) {
+            logger.warn('Rejected Jigasi request from unauthorized user:', iq.attrs.from);
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('forbidden', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        // Check room name header
+        const roomNameHeader = dialEl.getChild('header', { name: 'JvbRoomName' });
+        if (roomNameHeader && roomNameHeader.text() !== conference.roomName) {
+            logger.warn('Rejecting Jigasi request with non-matching JvbRoomName');
+            return xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('forbidden', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+        }
+        
+        logger.info('Accepted Jigasi request from:', iq.attrs.from);
+        
+        // Process the Jigasi request asynchronously
+        setTimeout(async () => {
+            try {
+                await inviteJigasi(iq, conference, jigasiDetector, xmppConnection);
+            } catch (error) {
+                logger.error('Failed to invite Jigasi:', error);
+                const errorIq = xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                    xml('error', { type: 'cancel' },
+                        xml('internal-server-error', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                    )
+                );
+                xmppConnection.send(errorIq);
+            }
+        }, 0);
+        
+        // Return immediate acceptance
+        return xml('iq', { type: 'result', to: iq.attrs.from, id: iq.attrs.id });
+    });
+}
+
+// Helper function to invite Jigasi
+async function inviteJigasi(iq, conference, jigasiDetector, xmppConnection, retryCount = 2, exclude = []) {
+    const destination = iq.getChild('dial', 'urn:xmpp:rayo:1').attrs.destination;
+    
+    const selector = destination === 'jitsi_meet_transcribe' 
+        ? jigasiDetector.selectTranscriber.bind(jigasiDetector)
+        : jigasiDetector.selectSipJigasi.bind(jigasiDetector);
+    
+    // Check if transcriber already exists
+    if (destination === 'jitsi_meet_transcribe' && conference.hasTranscriber()) {
+        logger.warn('Request failed, transcriber already available');
+        const errorIq = xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+            xml('error', { type: 'cancel' },
+                xml('conflict', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+            )
+        );
+        xmppConnection.send(errorIq);
+        return;
+    }
+    
+    // Select Jigasi instance
+    const jigasiJid = selector(exclude, conference.bridgeRegions);
+    if (!jigasiJid) {
+        logger.warn('Request failed, no Jigasi instances available');
+        const errorIq = xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+            xml('error', { type: 'cancel' },
+                xml('service-unavailable', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+            )
+        );
+        xmppConnection.send(errorIq);
+        return;
+    }
+    
+    logger.info('Selected Jigasi instance:', jigasiJid);
+    
+    // Forward the request to the selected Jigasi instance
+    const requestToJigasi = xml('iq', { type: 'set', to: jigasiJid },
+        iq.getChild('dial', 'urn:xmpp:rayo:1')
+    );
+    
+    try {
+        const responseFromJigasi = await xmppConnection.sendIq(requestToJigasi);
+        
+        // Forward the response back to the original requester
+        const responseToRequester = xml('iq', { type: 'result', to: iq.attrs.from, id: iq.attrs.id },
+            responseFromJigasi.getChild('ref', 'urn:xmpp:rayo:1')
+        );
+        xmppConnection.send(responseToRequester);
+        
+    } catch (error) {
+        logger.error('Failed to get response from Jigasi:', error);
+        
+        // Retry logic
+        if (retryCount > 0) {
+            const newExclude = [...exclude, jigasiJid];
+            await inviteJigasi(iq, conference, jigasiDetector, xmppConnection, retryCount - 1, newExclude);
+        } else {
+            const errorIq = xml('iq', { type: 'error', to: iq.attrs.from, id: iq.attrs.id },
+                xml('error', { type: 'cancel' },
+                    xml('service-unavailable', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' })
+                )
+            );
+            xmppConnection.send(errorIq);
+        }
+    }
 }
 
 module.exports = {
