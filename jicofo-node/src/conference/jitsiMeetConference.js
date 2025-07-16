@@ -13,6 +13,8 @@ const {
 } = require('../common/conference/source/validatingConferenceSourceMap');
 const { xml } = require('@xmpp/xml');
 const { IceUdpTransport } = require('../common/xmpp/jingle/iceUdpTransport'); // For type checking if needed
+const { createJingleOffer } = require('../common/xmpp/jingle/jingleOfferFactory');
+const { defaultJingleConfig } = require('../config/serviceConfigs');
 
 // This class gets per-conference properties (e.g. from MUC config form, or API)
 // and falls back to global config for defaults.
@@ -533,61 +535,33 @@ class JitsiMeetConference extends EventEmitter {
 
             const colibriAllocation = await this.jicofoSrv.colibriSessionManager.allocate(allocationParams);
             this.logger.info(`Colibri allocation successful for ${participant.endpointId}. Bridge session ID: ${colibriAllocation.bridgeSessionId}`);
-            // participant.setColibriConferenceId(colibriAllocation.bridgeSessionId); // Store on participant
 
-            const jingleContents = [];
-            const contentNamesForBundle = [];
+            // Use the new offer factory
+            const offerOptions = {
+                audio: allocationParams.requestAudio,
+                video: allocationParams.requestVideo,
+                sctp: allocationParams.useSctp && !!colibriAllocation.endpointSctpPort,
+                options: {}, // Add per-offer customizations if needed
+                config: this.jicofoSrv.jicofoConfig.jingle || defaultJingleConfig
+            };
+            const jingleContents = createJingleOffer(offerOptions);
+            const contentNamesForBundle = jingleContents.map(c => c.attrs.name);
             const self = this;
-            const createMediaContent = (mediaType) => {
-                const content = xml('content', { creator: 'initiator', name: mediaType, senders: 'both' });
-                const rtpDescription = xml('description', { xmlns: 'urn:xmpp:jingle:apps:rtp:1', media: mediaType });
-                const codecConfigPath = `jingle.codecs.${mediaType}`;
-                const hdrextConfigPath = `jingle.rtpHdrExts.${mediaType}`;
-                const codecList = self.jicofoSrv.jicofoConfig.getOptionalConfig(codecConfigPath, []);
-                const hdrextList = self.jicofoSrv.jicofoConfig.getOptionalConfig(hdrextConfigPath, []);
-                jingleUtils.createPayloadTypeElements(codecList).forEach(pt => rtpDescription.append(pt.clone()));
-                jingleUtils.createRtpHdrExtElements(hdrextList).forEach(ext => rtpDescription.append(ext.clone()));
 
-                // Add Jitsi-specific initial-last-n extension
-                const lastNConfigPath = `jingle.initialLastN.${mediaType}`;
-                const lastNValue = self.jicofoSrv.jicofoConfig.getOptionalConfig(lastNConfigPath, -1);
-                if (lastNValue > -2) { // -1 is common for "send all", -2 might mean "don't include"
-                    const initialLastNEl = xml('initial-last-n', { xmlns: `http://jitsi.org/jitmeet/${mediaType}` }, lastNValue.toString());
-                    rtpDescription.append(initialLastNEl);
-                }
-
-                content.append(rtpDescription);
+            // Add transport to each content if available
+            jingleContents.forEach(content => {
                 if (colibriAllocation.endpointTransport) {
                     content.append(colibriAllocation.endpointTransport.toXmlElement());
                 } else {
-                    self.logger.error(`No transport in Colibri for ${participant.endpointId}, media ${mediaType}`);
-                    return null;
+                    self.logger.error(`No transport in Colibri for ${participant.endpointId}, media ${content.attrs.name}`);
                 }
-                return content;
-            };
+            });
 
-            if (allocationParams.requestAudio) {
-                const audioContent = createMediaContent(MediaType.AUDIO);
-                if (audioContent) {
-                    jingleContents.push(audioContent);
-                    contentNamesForBundle.push(MediaType.AUDIO);
-                }
-            }
-            if (allocationParams.requestVideo) {
-                const videoContent = createMediaContent(MediaType.VIDEO);
-                if (videoContent) {
-                    jingleContents.push(videoContent);
-                    contentNamesForBundle.push(MediaType.VIDEO);
-                }
-            }
-
-            if (allocationParams.useSctp && colibriAllocation.endpointSctpPort) {
-                self.logger.info(`Adding SCTP data channel to Jingle offer, port ${colibriAllocation.endpointSctpPort}`);
-                const dataContent = xml('content', { creator: 'initiator', name: 'data', senders: 'both' });
-                const dataApplicationDesc = xml('description', { xmlns: 'urn:xmpp:jingle:apps:webrtc-datachannel:0' });
-                if (jingleContents.length > 0) {
-                    const firstMediaContent = jingleContents[0];
-                    const transportElement = firstMediaContent.getChild('transport', jingleUtils.JINGLE_ICE_UDP_TRANSPORT_NS);
+            // Add SCTP port to data content if needed
+            if (offerOptions.sctp && colibriAllocation.endpointSctpPort) {
+                const dataContent = jingleContents.find(c => c.attrs.name === 'data');
+                if (dataContent) {
+                    const transportElement = jingleContents[0]?.getChild('transport');
                     if (transportElement) {
                         transportElement.append(
                             xml('sctp-port', {
@@ -595,14 +569,7 @@ class JitsiMeetConference extends EventEmitter {
                                 value: colibriAllocation.endpointSctpPort.toString()
                             })
                         );
-                         dataContent.append(dataApplicationDesc);
-                         jingleContents.push(dataContent);
-                         contentNamesForBundle.push('data');
-                    } else {
-                        self.logger.warn(`No transport found in first media content to attach SCTP port for ${participant.endpointId}.`);
                     }
-                } else {
-                     self.logger.warn(`No media content found to attach SCTP port for ${participant.endpointId}. Data channel not offered.`);
                 }
             }
 

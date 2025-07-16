@@ -27,6 +27,9 @@ const ConferenceSourceMap = require('../src/common/conference/source/conferenceS
 const EndpointSourceSet = require('../src/common/conference/source/endpointSourceSet');
 const Source = require('../src/common/conference/source/source');
 const MediaType = require('../src/common/conference/source/mediaType');
+const { createJingleOffer } = require('../src/common/xmpp/jingle/jingleOfferFactory');
+const { defaultJingleConfig } = require('../src/config/serviceConfigs');
+const { xml } = require('@xmpp/xml');
 
 // Mock XMPP connection for testing
 class MockXmppConnection {
@@ -361,5 +364,51 @@ describe('Jingle Protocol Implementation', () => {
             assert.ok(stats.stanzas.sent['session-initiate'] > 0);
             assert.ok(stats.stanzas.sent['session-terminate'] > 0);
         });
+    });
+}); 
+
+describe('JingleOfferFactory', () => {
+    it('should create an audio+video offer with correct codecs and extensions', () => {
+        const offer = createJingleOffer({ audio: true, video: true, sctp: false, config: defaultJingleConfig });
+        const audioContent = offer.find(c => c.attrs.name === 'audio');
+        const videoContent = offer.find(c => c.attrs.name === 'video');
+        assert.ok(audioContent);
+        assert.ok(videoContent);
+        // Check payload-types
+        const audioPayloads = audioContent.getChild('description').getChildren('payload-type');
+        assert.ok(audioPayloads.length > 0);
+        const opus = audioPayloads.find(pt => pt.attrs.name === 'opus');
+        assert.ok(opus);
+        // Check parameters and feedback
+        const opusParams = opus.getChildren('parameter');
+        assert.ok(opusParams.some(p => p.attrs.name === 'minptime'));
+        const opusFb = opus.getChildren('rtcp-fb');
+        assert.ok(opusFb.some(fb => fb.attrs.type === 'transport-cc'));
+        // Video
+        const videoPayloads = videoContent.getChild('description').getChildren('payload-type');
+        assert.ok(videoPayloads.length > 0);
+        const vp8 = videoPayloads.find(pt => pt.attrs.name === 'VP8');
+        assert.ok(vp8);
+        const vp8Fb = vp8.getChildren('rtcp-fb');
+        assert.ok(vp8Fb.some(fb => fb.attrs.type === 'ccm' && fb.attrs.subtype === 'fir'));
+        assert.ok(vp8Fb.some(fb => fb.attrs.type === 'nack'));
+    });
+
+    it('should create an audio-only offer', () => {
+        const offer = createJingleOffer({ audio: true, video: false, sctp: false, config: defaultJingleConfig });
+        assert.strictEqual(offer.length, 1);
+        assert.strictEqual(offer[0].attrs.name, 'audio');
+    });
+
+    it('should create a video-only offer', () => {
+        const offer = createJingleOffer({ audio: false, video: true, sctp: false, config: defaultJingleConfig });
+        assert.strictEqual(offer.length, 1);
+        assert.strictEqual(offer[0].attrs.name, 'video');
+    });
+
+    it('should include data content if sctp is true', () => {
+        const offer = createJingleOffer({ audio: false, video: false, sctp: true, config: defaultJingleConfig });
+        assert.strictEqual(offer.length, 1);
+        assert.strictEqual(offer[0].attrs.name, 'data');
     });
 }); 

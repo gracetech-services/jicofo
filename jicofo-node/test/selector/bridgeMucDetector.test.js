@@ -1,12 +1,29 @@
 const assert = require('assert');
 const EventEmitter = require('events');
-const { xml } = require('@xmpp/xml');
+const { createElement } = require('@xmpp/xml');
+const proxyquire = require('proxyquire');
 
-const BridgeMucDetector = require('../../src/selector/bridge/bridgeMucDetector');
-const Bridge = require('../../src/selector/bridge/bridge');
-const { JidUtils } = require('../../src/config/serviceConfigs'); // For JidUtils.entityBareFrom
+class MockBridge {
+    constructor(jid) {
+        this.jid = jid;
+        this._isOperational = true;
+        this._isInGracefulShutdown = false;
+        this.version = null;
+        this.region = null;
+        this.stress = null;
+        this.relayId = null;
+    }
+    getJid() { return this.jid; }
+    getVersion() { return this.version; }
+    getRegion() { return this.region; }
+    getRelayId() { return this.relayId; }
+    get isOperational() { return this._isOperational; }
+    setIsOperational(val) { this._isOperational = val; }
+    get isInGracefulShutdown() { return this._isInGracefulShutdown; }
+    setIsInGracefulShutdown(val) { this._isInGracefulShutdown = val; }
+    updateStats(stats) { this.stress = stats.stress; }
+}
 
-// --- Mocks ---
 class MockChatRoom extends EventEmitter {
     constructor(roomJid, xmppConnection, nickname, logger) {
         super();
@@ -17,9 +34,10 @@ class MockChatRoom extends EventEmitter {
         this.joined = false;
         this.presenceHandler = null;
         this.messageHandler = null;
+        this.leaveCalled = false; // Track leave calls
     }
     async join() { this.joined = true; this.logger.info(`MockChatRoom: Joined ${this.roomJid}`); }
-    async leave() { this.joined = false; this.logger.info(`MockChatRoom: Left ${this.roomJid}`); }
+    async leave() { this.joined = false; this.leaveCalled = true; this.logger.info(`MockChatRoom: Left ${this.roomJid}`); }
     getNick() { return this.nickname; }
     getRoomJid() { return this.roomJid; }
     // removeAllListeners is part of EventEmitter
@@ -30,8 +48,19 @@ class MockManagedXmppConnection {
         this.name = name;
         this.config = config;
         this.isRegistered = true; // Assume connected for tests
-        this.xmpp = { jid: { toString: () => `${config.username}@${config.domain}/${config.resource}`, bare: () => JidUtils.parse(`${config.username}@${config.domain}`) } };
+        this.xmpp = {
+            jid: {
+                toString: () => `${config.username}@${config.domain}/${config.resource}`,
+                bare: () => JidUtils.parse(`${config.username}@${config.domain}`),
+                getResource: () => config.resource // Add getResource for test compatibility
+            }
+        };
     }
+    // Add joinMuc and leaveMuc as no-op async functions for compatibility
+    async joinMuc(roomJid, nickname) { /* no-op for test */ }
+    async leaveMuc(roomJid, nickname, statusMessage) { /* no-op for test */ }
+    // Add addPresenceListener as a no-op that returns a removal function
+    addPresenceListener(handler) { return () => {}; }
     // Add other methods if BridgeMucDetector starts using them
 }
 
@@ -60,6 +89,9 @@ const NS_JITSI_MEET_PRESENCE = 'http://jitsi.org/jitmeet';
 const NS_OCTO = 'urn:xmpp:octo:1';
 const NS_COLIBRI_STATS = 'http://jitsi.org/protocol/colibri';
 
+const BridgeMucDetector = proxyquire('../../../src/selector/bridge/bridgeMucDetector.js', {
+    '../../../src/selector/bridge/bridge.js': MockBridge
+});
 
 describe('BridgeMucDetector', () => {
     let detector;
@@ -73,10 +105,8 @@ describe('BridgeMucDetector', () => {
         mockXmppConnection = new MockManagedXmppConnection('client', {
             username: 'jicofo', domain: 'example.com', resource: 'test'
         });
-        // Pass the real ChatRoom for now, but its join/leave are mocked if needed by spying
-        // Forcing detector to use MockChatRoom
         detector = new BridgeMucDetector(mockXmppConnection, mockBridgeSelector, breweryJid, focusNick, mockJicofoSrv);
-        detector.ChatRoom = MockChatRoom; // Inject mock ChatRoom class, constructor will use this
+        detector.ChatRoom = MockChatRoom; // Ensure mock is used before start()
     });
 
     afterEach(async () => {
@@ -103,33 +133,33 @@ describe('BridgeMucDetector', () => {
         if (sendJvbElement) {
             const jvbElAttrs = { xmlns: NS_JVB_PRESENCE };
             if (version) jvbElAttrs.version = version;
-            extensions.push(xml('jitsi-videobridge', jvbElAttrs));
+            extensions.push(createElement('jitsi-videobridge', jvbElAttrs));
         }
 
         if (region) {
-            extensions.push(xml('region', { xmlns: NS_JITSI_MEET_PRESENCE }, region));
+            extensions.push(createElement('region', { xmlns: NS_JITSI_MEET_PRESENCE }, region));
         }
 
         if (stressLocation === 'stress-level' && stress !== null) {
-            extensions.push(xml('stress-level', { xmlns: NS_JVB_PRESENCE }, stress.toString()));
+            extensions.push(createElement('stress-level', { xmlns: NS_JVB_PRESENCE }, stress.toString()));
         } else if (stressLocation === 'stats-stress' && stress !== null) {
-            extensions.push(xml('stats', { xmlns: NS_COLIBRI_STATS }, xml('stress', {}, stress.toString())));
+            extensions.push(createElement('stats', { xmlns: NS_COLIBRI_STATS }, createElement('stress', {}, stress.toString())));
         }
 
         if (relayId) {
-            extensions.push(xml('relay', { xmlns: NS_OCTO, id: relayId }));
+            extensions.push(createElement('relay', { xmlns: NS_OCTO, id: relayId }));
         }
         if (gracefulShutdown) {
-            extensions.push(xml('graceful-shutdown', { xmlns: NS_JVB_PRESENCE }));
+            extensions.push(createElement('graceful-shutdown', { xmlns: NS_JVB_PRESENCE }));
         }
         if (statsId) {
-            extensions.push(xml('stats-id', {xmlns: NS_JITSI_MEET_PRESENCE}, statsId))
+            extensions.push(createElement('stats-id', {xmlns: NS_JITSI_MEET_PRESENCE}, statsId))
         }
         // Add <c> element for caps, assuming default features for now
-        extensions.push(xml('c', { xmlns: 'http://jabber.org/protocol/caps', hash: 'sha-1', node: 'http://jitsi.org/jitsimeet', ver: 'testver' }));
+        extensions.push(createElement('c', { xmlns: 'http://jabber.org/protocol/caps', hash: 'sha-1', node: 'http://jitsi.org/jitsimeet', ver: 'testver' }));
 
 
-        return xml('presence', { from, to: `${focusNick}@example.com/test` }, ...extensions);
+        return createElement('presence', { from, to: `${focusNick}@example.com/test` }, ...extensions);
     }
 
     function createChatRoomMember(fromNick, presenceStanza) {
@@ -176,7 +206,7 @@ describe('BridgeMucDetector', () => {
         assert.strictEqual(mockBridgeSelector.calls[0].name, 'addBridge', "Call should be addBridge");
         const addedBridge = mockBridgeSelector.calls[0].args[0];
 
-        assert.ok(addedBridge instanceof Bridge, "Argument should be a Bridge instance");
+        assert.ok(addedBridge instanceof MockBridge, "Argument should be a MockBridge instance");
         assert.strictEqual(addedBridge.getJid(), jvbComponentJid, "Bridge JID mismatch");
         assert.strictEqual(addedBridge.getVersion(), presenceParams.version, "Version mismatch");
         assert.strictEqual(addedBridge.getRegion(), presenceParams.region, "Region mismatch");
@@ -226,7 +256,7 @@ describe('BridgeMucDetector', () => {
         mockBridgeSelector.reset(); // Clear addBridge call
 
         // Then, simulate leave
-        const leavePresence = xml('presence', { from: `${breweryJid}/${jvbNick}`, type: 'unavailable' });
+        const leavePresence = createElement('presence', { from: `${breweryJid}/${jvbNick}`, type: 'unavailable' });
         detector.chatRoom.emit('memberLeft', memberObj, leavePresence);
 
         assert.strictEqual(mockBridgeSelector.calls.length, 1);
@@ -250,16 +280,12 @@ describe('BridgeMucDetector', () => {
     });
 
     it('should stop and leave MUC', async () => {
-        await detector.start(); // Joins the MUC
-        const realChatRoomLeave = MockChatRoom.prototype.leave;
-        let leaveCalled = false;
-        MockChatRoom.prototype.leave = async function() { leaveCalled = true; this.joined = false; };
-
+        await detector.start();
+        const chatRoomRef = detector.chatRoom;
         await detector.stop();
-        assert.ok(leaveCalled, 'ChatRoom.leave should have been called');
+        assert.ok(chatRoomRef.leaveCalled, 'ChatRoom.leave should have been called');
         assert.ok(!detector.isRunning);
         assert.strictEqual(detector.chatRoom, null);
-        MockChatRoom.prototype.leave = realChatRoomLeave; // Restore
     });
 
 });

@@ -138,6 +138,64 @@ const RestConfig = {
     }
 };
 
+const defaultJingleConfig = {
+  codecs: {
+    audio: [
+      {
+        id: 111,
+        name: 'opus',
+        clockrate: 48000,
+        channels: 2,
+        parameters: { minptime: 10, useinbandfec: 1 },
+        feedback: [
+          { type: 'transport-cc' }
+        ]
+      },
+      {
+        id: 126,
+        name: 'telephone-event',
+        clockrate: 8000
+      }
+    ],
+    video: [
+      {
+        id: 100,
+        name: 'VP8',
+        clockrate: 90000,
+        feedback: [
+          { type: 'ccm', subtype: 'fir' },
+          { type: 'nack' },
+          { type: 'nack', subtype: 'pli' },
+          { type: 'goog-remb' },
+          { type: 'transport-cc' }
+        ]
+      },
+      {
+        id: 101,
+        name: 'rtx',
+        clockrate: 90000,
+        parameters: { apt: 100 }
+      }
+    ]
+  },
+  rtpHdrExts: {
+    audio: [
+      { id: 1, uri: 'urn:ietf:params:rtp-hdrext:ssrc-audio-level' },
+      { id: 10, uri: 'urn:ietf:params:rtp-hdrext:sdes:mid' },
+      { id: 5, uri: 'http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01' }
+    ],
+    video: [
+      { id: 2, uri: 'http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time' },
+      { id: 10, uri: 'urn:ietf:params:rtp-hdrext:sdes:mid' },
+      { id: 3, uri: 'http://www.webrtc.org/experiments/rtp-hdrext/video-content-type' },
+      { id: 4, uri: 'urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id' },
+      { id: 5, uri: 'http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01' }
+    ]
+  }
+};
+
+// Export or merge this into your config system as needed
+module.exports.defaultJingleConfig = defaultJingleConfig;
 
 module.exports = {
     AuthConfig,

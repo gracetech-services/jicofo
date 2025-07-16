@@ -59,8 +59,9 @@ module.exports = {
 
 /**
  * Creates an array of <payload-type> XML elements from a codec config list.
+ * Each codec object can include feedback and parameters arrays.
  * @param {object[]} codecList - Array of codec config objects.
- *        Each object: { id: number, name: string, clockrate: number, channels?: number, parameters?: object }
+ *        Each object: { id: number, name: string, clockrate: number, channels?: number, parameters?: object, feedback?: object[] }
  * @returns {Element[]} Array of <payload-type> XML elements.
  */
 function createPayloadTypeElements(codecList = []) {
@@ -79,7 +80,17 @@ function createPayloadTypeElements(codecList = []) {
                 paramElements.push(createElement('parameter', { name, value }));
             }
         }
-        return createElement('payload-type', attrs, ...paramElements);
+        // Feedback types (e.g., NACK, PLI, REMB, transport-cc)
+        const feedbackElements = [];
+        if (Array.isArray(codec.feedback)) {
+            for (const fb of codec.feedback) {
+                feedbackElements.push(createElement('rtcp-fb', {
+                    type: fb.type,
+                    ...(fb.subtype ? { subtype: fb.subtype } : {})
+                }));
+            }
+        }
+        return createElement('payload-type', attrs, ...paramElements, ...feedbackElements);
     });
 }
 
