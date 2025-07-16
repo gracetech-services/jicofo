@@ -1,6 +1,7 @@
 const EventEmitter = require('events');
 const loggerModule = require('../../utils/logger');
 const { JidUtils } = require('../../config/serviceConfigs');
+const { xml } = require('@xmpp/client');
 
 const { Features, createFeatureSet } = require('../features'); // Import Features
 
@@ -274,9 +275,169 @@ class ChatRoom extends EventEmitter {
         return nick ? this.members.get(nick) : null;
     }
 
-    // TODO: Add methods for MUC configuration, presence updates, role/affiliation changes, etc.
+    // Role management methods
+    async grantOwnership(member) {
+        if (!this.joined) {
+            this.logger.warn('Cannot grant ownership, not joined to MUC.');
+            return false;
+        }
+        
+        try {
+            // Send IQ to grant ownership
+            const iq = xml('iq', { type: 'set', to: this.roomJid },
+                xml('query', { xmlns: 'http://jabber.org/protocol/muc#admin' },
+                    xml('item', { 
+                        jid: member.mucJid, 
+                        affiliation: 'owner' 
+                    })
+                )
+            );
+            
+            const response = await this.xmppConnection.sendIq(iq);
+            if (response && response.attrs.type === 'result') {
+                this.logger.info(`Granted ownership to ${member.getName()}`);
+                member.affiliation = 'owner';
+                this.emit('memberRoleChanged', member, 'owner');
+                return true;
+            } else {
+                this.logger.error('Failed to grant ownership:', response);
+                return false;
+            }
+        } catch (error) {
+            this.logger.error('Error granting ownership:', error);
+            return false;
+        }
+    }
+
+    async grantModerator(member) {
+        if (!this.joined) {
+            this.logger.warn('Cannot grant moderator, not joined to MUC.');
+            return false;
+        }
+        
+        try {
+            // Send IQ to grant moderator role
+            const iq = xml('iq', { type: 'set', to: this.roomJid },
+                xml('query', { xmlns: 'http://jabber.org/protocol/muc#admin' },
+                    xml('item', { 
+                        nick: member.getName(), 
+                        role: 'moderator' 
+                    })
+                )
+            );
+            
+            const response = await this.xmppConnection.sendIq(iq);
+            if (response && response.attrs.type === 'result') {
+                this.logger.info(`Granted moderator role to ${member.getName()}`);
+                member.role = 'moderator';
+                this.emit('memberRoleChanged', member, 'moderator');
+                return true;
+            } else {
+                this.logger.error('Failed to grant moderator:', response);
+                return false;
+            }
+        } catch (error) {
+            this.logger.error('Error granting moderator:', error);
+            return false;
+        }
+    }
+
+    async revokeModerator(member) {
+        if (!this.joined) {
+            this.logger.warn('Cannot revoke moderator, not joined to MUC.');
+            return false;
+        }
+        
+        try {
+            // Send IQ to revoke moderator role
+            const iq = xml('iq', { type: 'set', to: this.roomJid },
+                xml('query', { xmlns: 'http://jabber.org/protocol/muc#admin' },
+                    xml('item', { 
+                        nick: member.getName(), 
+                        role: 'participant' 
+                    })
+                )
+            );
+            
+            const response = await this.xmppConnection.sendIq(iq);
+            if (response && response.attrs.type === 'result') {
+                this.logger.info(`Revoked moderator role from ${member.getName()}`);
+                member.role = 'participant';
+                this.emit('memberRoleChanged', member, 'participant');
+                return true;
+            } else {
+                this.logger.error('Failed to revoke moderator:', response);
+                return false;
+            }
+        } catch (error) {
+            this.logger.error('Error revoking moderator:', error);
+            return false;
+        }
+    }
+
+    async kickMember(member, reason = '') {
+        if (!this.joined) {
+            this.logger.warn('Cannot kick member, not joined to MUC.');
+            return false;
+        }
+        
+        try {
+            // Send IQ to kick member
+            const iq = xml('iq', { type: 'set', to: this.roomJid },
+                xml('query', { xmlns: 'http://jabber.org/protocol/muc#admin' },
+                    xml('item', { 
+                        nick: member.getName(), 
+                        role: 'none' 
+                    }),
+                    reason ? xml('reason', {}, reason) : null
+                )
+            );
+            
+            const response = await this.xmppConnection.sendIq(iq);
+            if (response && response.attrs.type === 'result') {
+                this.logger.info(`Kicked member ${member.getName()}`);
+                this.emit('memberKicked', member, reason);
+                return true;
+            } else {
+                this.logger.error('Failed to kick member:', response);
+                return false;
+            }
+        } catch (error) {
+            this.logger.error('Error kicking member:', error);
+            return false;
+        }
+    }
+
+    // Check if member has moderator or owner rights
+    hasModeratorRights(member) {
+        return member.role === 'moderator' || member.affiliation === 'owner' || member.affiliation === 'admin';
+    }
+
+    hasOwnerRights(member) {
+        return member.affiliation === 'owner';
+    }
+
+    // Get members by role/affiliation
+    getModerators() {
+        return Array.from(this.members.values()).filter(member => 
+            member.role === 'moderator' || member.affiliation === 'owner' || member.affiliation === 'admin'
+        );
+    }
+
+    getOwners() {
+        return Array.from(this.members.values()).filter(member => 
+            member.affiliation === 'owner'
+        );
+    }
+
+    getParticipants() {
+        return Array.from(this.members.values()).filter(member => 
+            member.role === 'participant'
+        );
+    }
+
+    // TODO: Add methods for MUC configuration, presence updates, etc.
     // async updatePresenceExtensions(extensions) { ... }
-    // async grantOwnership() { ... }
     // getLobbyEnabled(), getVisitorsEnabled() - from MUC config
 }
 
