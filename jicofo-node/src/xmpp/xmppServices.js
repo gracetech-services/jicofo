@@ -2,6 +2,7 @@ const logger = require('../utils/logger');
 const { client, xml } = require('@xmpp/client'); // Using @xmpp/client
 const EventEmitter = require('events');
 const conferenceStore = require('../common/conferenceStore');
+const JingleIqRequestHandler = require('../common/xmpp/jingle/jingleIqRequestHandler');
 
 // Wrapper for @xmpp/client to somewhat mimic the XmppConnection interface used elsewhere
 // and to manage Jicofo-specific needs like listeners for registration changes.
@@ -472,6 +473,9 @@ class XmppServices {
         // if (this.serviceConnectionConfig) await this.serviceConnection.connect();
 
 
+        // Initialize Jingle IQ request handler
+        this.jingleIqRequestHandler = new JingleIqRequestHandler([this.clientConnection, this.serviceConnection]);
+        
         // Placeholder for ConferenceIqHandler, AvModerationHandler, JigasiDetector
         this.conferenceIqHandler = { debugState: {}, handleConferenceIq: async (iq) => { /* ... */ } };
         this.avModerationHandler = { debugState: {} };
@@ -534,7 +538,15 @@ class XmppServices {
     // - addHandler, removeHandler for various IQs, messages, presence
     // - Methods to send specific types of IQs (e.g., Colibri, Jingle)
 
-    // --- Jingle Handling --- (To be used by JingleHandler in XmppServices)
+    // --- Jingle Handling ---
+    /**
+     * Gets the Jingle IQ request handler.
+     * @returns {JingleIqRequestHandler} The Jingle IQ request handler
+     */
+    getJingleIqRequestHandler() {
+        return this.jingleIqRequestHandler;
+    }
+
     /**
      * Provides the raw iqCaller from @xmpp/client for sending IQs and handling responses.
      * JingleSession will need this or a wrapper.

@@ -2,7 +2,7 @@ const Source = require('./source');
 const SsrcGroup = require('./ssrcGroup');
 const MediaType = require('./mediaType');
 const { SsrcGroupSemantics } = require('./ssrcGroupSemantics');
-const { xml } = require('@xmpp/xml');
+const { createElement } = require('@xmpp/xml');
 
 class EndpointSourceSet {
     /**
@@ -84,7 +84,7 @@ class EndpointSourceSet {
             let rtpDescElement;
 
             if (!contentElement) {
-                contentElement = xml('content', { name: mediaType });
+                contentElement = createElement('content', { name: mediaType });
                 // Standard Jingle content creator/disposition would be set by the caller of toJingleContents,
                 // e.g. JingleSession when building session-initiate.
                 mediaTypeToContentMap.set(mediaType, contentElement);
@@ -92,7 +92,7 @@ class EndpointSourceSet {
 
             rtpDescElement = contentElement.getChild('description', 'urn:xmpp:jingle:apps:rtp:1');
             if (!rtpDescElement) {
-                rtpDescElement = xml('description', { xmlns: 'urn:xmpp:jingle:apps:rtp:1', media: mediaType });
+                rtpDescElement = createElement('description', { xmlns: 'urn:xmpp:jingle:apps:rtp:1', media: mediaType });
                 contentElement.append(rtpDescElement);
             }
             return rtpDescElement;
@@ -345,7 +345,7 @@ class EndpointSourceSet {
             return null;
         }
 
-        return xml('sources', { xmlns: 'urn:xmpp:colibri2:conference' }, ...sourceElements);
+        return createElement('sources', { xmlns: 'urn:xmpp:colibri2:conference' }, ...sourceElements);
     }
 
     /**

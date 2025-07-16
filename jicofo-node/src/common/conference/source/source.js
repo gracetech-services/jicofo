@@ -1,6 +1,6 @@
 const MediaType = require('./mediaType');
 const { VideoType, parseVideoType } = require('./videoType');
-const { xml } = require('@xmpp/xml');
+const { createElement } = require('@xmpp/xml');
 const { JidUtils } = require('../../../config/serviceConfigs'); // For JidCreate.from equivalent if owner is JID like
 
 /**
@@ -100,16 +100,16 @@ class Source {
         if (ownerJidStr) {
             // JidUtils.parse(ownerJidStr) might be needed if owner is full JID and only bare/full is desired
             children.push(
-                xml('ssrc-info', { xmlns: 'http://jitsi.org/jitmeet', owner: ownerJidStr })
+                createElement('ssrc-info', { xmlns: 'http://jitsi.org/jitmeet', owner: ownerJidStr })
             );
         }
         if (encodeMsid && this.msid) {
             children.push(
-                xml('parameter', { xmlns: 'urn:xmpp:jingle:apps:rtp:ssma:0', name: 'msid', value: this.msid })
+                createElement('parameter', { xmlns: 'urn:xmpp:jingle:apps:rtp:ssma:0', name: 'msid', value: this.msid })
             );
         }
 
-        return xml('source', sourceAttrs, ...children);
+        return createElement('source', sourceAttrs, ...children);
     }
 
     /**
