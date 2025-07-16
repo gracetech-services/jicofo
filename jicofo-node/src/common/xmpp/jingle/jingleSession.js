@@ -1,30 +1,9 @@
-const { xml, Element } = require('@xmpp/xml');
+const { createElement, Element } = require('@xmpp/xml');
 const loggerModule = require('../../../utils/logger');
-const ConferenceSourceMap = require('../../conference/source/conferenceSourceMap'); // Import actual
-const { createSessionInitiate, createTransportReplace, createBundleGroupExtension } = require('./jingleUtils'); // Import createBundleGroupExtension
-// const JingleStats = { stanzaReceived: () => {}, stanzaSent: () => {} }; // Placeholder
-const { JingleReason, JINGLE_REASON_ERRORS_NS, JINGLE_REASON_NORMAL_NS } = require('./jingleReason');
-
-const State = Object.freeze({
-    PENDING: 'pending',
-    ACTIVE: 'active',
-    ENDED: 'ended'
-});
-
-const JingleAction = Object.freeze({
-    SESSION_INITIATE: "session-initiate",
-    SESSION_ACCEPT: "session-accept",
-    SESSION_TERMINATE: "session-terminate",
-    SESSION_INFO: "session-info",
-    TRANSPORT_REPLACE: "transport-replace",
-    TRANSPORT_ACCEPT: "transport-accept",
-    TRANSPORT_REJECT: "transport-reject",
-    TRANSPORT_INFO: "transport-info",
-    ADDSOURCE: "addsource",
-    SOURCEADD: "source-add",
-    REMOVESOURCE: "removesource",
-    SOURCEREMOVE: "source-remove",
-});
+const ConferenceSourceMap = require('../../conference/source/conferenceSourceMap');
+const { createSessionInitiate, createTransportReplace, createBundleGroupExtension } = require('./jingleUtils');
+const { JingleAction, State, JingleReason } = require('./jingleConstants');
+const { jingleStatsInstance } = require('./jingleStats');
 
 // Helper to create Jitsi's JsonMessageExtension for sources
 function createJsonSourcesMessageExtension(conferenceSourceMap) {
@@ -36,7 +15,7 @@ function createJsonSourcesMessageExtension(conferenceSourceMap) {
         sourcesForPayload[ownerId] = JSON.parse(endpointSet.compactJson);
     });
     const payload = JSON.stringify({ sources: sourcesForPayload });
-    return xml('json-message', { xmlns: 'http://jitsi.org/jitmeet' }, payload);
+    return createElement('json-message', { xmlns: 'http://jitsi.org/jitmeet' }, payload);
 }
 
 // createBundleGroupExtension MOVED to jingleUtils.js
@@ -78,9 +57,14 @@ class JingleSession {
 
     async processJingleIq(iq, action, jingleChildren) {
         this.logger.debug(`Queueing Jingle IQ for processing: action=${action}`);
-        this.incomingIqQueue.push({ iq, action, jingleChildren });
-        this._dequeueAndProcess();
-        return null;
+        
+        // Track statistics
+        jingleStatsInstance.stanzaReceived(action);
+        
+        return new Promise((resolve) => {
+            this.incomingIqQueue.push({ iq, action, jingleChildren, resolve });
+            this._dequeueAndProcess();
+        });
     }
 
     async _dequeueAndProcess() {
@@ -89,19 +73,22 @@ class JingleSession {
         }
         this.processingLock = true;
 
-        const { iq, action, jingleChildren } = this.incomingIqQueue.shift();
+        const { iq, action, jingleChildren, resolve } = this.incomingIqQueue.shift();
 
         if (this.state === State.ENDED && action !== JingleAction.SESSION_TERMINATE) {
             this.logger.warn(`Session ended, ignoring IQ action: ${action}`);
             this.processingLock = false;
             this._dequeueAndProcess();
+            if (resolve) resolve(null);
             return;
         }
 
         try {
-            await this._doProcessIq(iq, action, jingleChildren);
+            const response = await this._doProcessIq(iq, action, jingleChildren);
+            if (resolve) resolve(response);
         } catch (error) {
             this.logger.error(`Error in _doProcessIq for action ${action}:`, error);
+            if (resolve) resolve(null);
         } finally {
             this.processingLock = false;
             this._dequeueAndProcess();
@@ -155,18 +142,22 @@ class JingleSession {
         let response;
         if (errorStanzaPart) {
             this.logger.info(`Jingle action '${action}' resulted in error: ${errorStanzaPart.condition} - ${errorStanzaPart.text}`);
-            const jingleErrorElement = xml('jingle', { xmlns: 'urn:xmpp:jingle:1', sid: this.sid });
-            response = xml('iq', { type: 'error', to: from, id },
+            const jingleErrorElement = createElement('jingle', { xmlns: 'urn:xmpp:jingle:1', sid: this.sid });
+            response = createElement('iq', { type: 'error', to: from, id },
                 jingleErrorElement,
-                xml('error', { type: errorStanzaPart.type || 'cancel' },
-                    xml(errorStanzaPart.condition, { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' }),
-                    errorStanzaPart.text ? xml('text', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' }, errorStanzaPart.text) : null
+                createElement('error', { type: errorStanzaPart.type || 'cancel' },
+                    createElement(errorStanzaPart.condition, { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' }),
+                    errorStanzaPart.text ? createElement('text', { xmlns: 'urn:ietf:params:xml:ns:xmpp-stanzas' }, errorStanzaPart.text) : null
                 )
             );
         } else {
-            response = xml('iq', { type: 'result', to: from, id });
+            response = createElement('iq', { type: 'result', to: from, id });
         }
         await this.jingleHandler.sendIq(response);
+        
+        // Track successful response
+        jingleStatsInstance.stanzaSent(action);
+        return response;
     }
 
     async terminate(reason, message, sendIq = true) {
@@ -177,19 +168,20 @@ class JingleSession {
         if (oldState === State.ENDED && sendIq) {
             this.logger.warn("Not sending session-terminate IQ; session already ended.");
         } else if (sendIq) {
-            const terminateIq = xml('iq', { type: 'set', to: this.remoteJid, from: this.localJid, id: this._generateIqId() },
-                xml('jingle', {
+            const terminateIq = createElement('iq', { type: 'set', to: this.remoteJid, from: this.localJid, id: this._generateIqId() },
+                createElement('jingle', {
                         xmlns: 'urn:xmpp:jingle:1',
                         action: JingleAction.SESSION_TERMINATE,
                         sid: this.sid,
                         initiator: this.localJid // Jicofo is usually initiator of the session it creates
                     },
-                    reason ? xml('reason', {}, xml(reason.name, { xmlns: reason.xmlns })) : null,
-                    message ? xml('text', {}, message) : null // Jitsi custom for message with reason
+                    reason ? createElement('reason', {}, createElement(reason.name, { xmlns: reason.xmlns })) : null,
+                    message ? createElement('text', {}, message) : null // Jitsi custom for message with reason
                 )
             );
             try {
                 await this.jingleHandler.sendIq(terminateIq);
+                jingleStatsInstance.stanzaSent(JingleAction.SESSION_TERMINATE);
             } catch (e) {
                 this.logger.error('Failed to send session-terminate IQ:', e);
             }
@@ -246,6 +238,7 @@ class JingleSession {
         this.jingleHandler.registerSession(this);
         try {
             const response = await this.jingleHandler.iqCaller.request(sessionInitiateIq);
+            jingleStatsInstance.stanzaSent(JingleAction.SESSION_INITIATE);
             if (response === null || response.attrs.type === 'result') {
                 this.logger.info(`session-initiate for SID ${this.sid} sent, awaiting session-accept.`);
                 return true;
@@ -292,6 +285,7 @@ class JingleSession {
 
         try {
             const response = await this.jingleHandler.iqCaller.request(transportReplaceIq);
+            jingleStatsInstance.stanzaSent(JingleAction.TRANSPORT_REPLACE);
             if (response?.attrs.type === 'result') {
                 this.logger.info(`transport-replace for SID ${this.sid} successful.`);
                 return true;
@@ -329,13 +323,14 @@ class JingleSession {
             return;
         }
 
-        const addSourceIq = xml('iq', { type: 'set', to: this.remoteJid, from: this.localJid, id: this._generateIqId() },
-            xml('jingle', { xmlns: 'urn:xmpp:jingle:1', action: JingleAction.SOURCEADD, sid: this.sid },
+        const addSourceIq = createElement('iq', { type: 'set', to: this.remoteJid, from: this.localJid, id: this._generateIqId() },
+            createElement('jingle', { xmlns: 'urn:xmpp:jingle:1', action: JingleAction.SOURCEADD, sid: this.sid },
                 ...jinglePayloadChildren
             )
         );
         try {
             await this.jingleHandler.sendIq(addSourceIq);
+            jingleStatsInstance.stanzaSent(JingleAction.SOURCEADD);
         } catch (e) {
             this.logger.error(`Failed to send source-add IQ for SID ${this.sid}:`, e);
         }
@@ -365,13 +360,14 @@ class JingleSession {
             return;
         }
 
-        const removeSourceIq = xml('iq', { type: 'set', to: this.remoteJid, from: this.localJid, id: this._generateIqId() },
-            xml('jingle', { xmlns: 'urn:xmpp:jingle:1', action: JingleAction.SOURCEREMOVE, sid: this.sid },
+        const removeSourceIq = createElement('iq', { type: 'set', to: this.remoteJid, from: this.localJid, id: this._generateIqId() },
+            createElement('jingle', { xmlns: 'urn:xmpp:jingle:1', action: JingleAction.SOURCEREMOVE, sid: this.sid },
                 ...jinglePayloadChildren
             )
         );
         try {
             await this.jingleHandler.sendIq(removeSourceIq);
+            jingleStatsInstance.stanzaSent(JingleAction.SOURCEREMOVE);
         } catch (e) {
             this.logger.error(`Failed to send source-remove IQ for SID ${this.sid}:`, e);
         }
@@ -393,4 +389,4 @@ class JingleSession {
     }
 }
 
-module.exports = { JingleSession, JingleAction, State };
+module.exports = { JingleSession };
