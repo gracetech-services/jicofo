@@ -32,7 +32,7 @@
       "healthChecksEnabled": true,
       "breweryJid": "jvbbrewery.yourdomain.com",
       "xmppConnectionName": "service",
-      "selectionStrategyName": "RegionThenLoad",
+      "selectionStrategy": "region",
       "maxBridgeStress": 0.85,
       "preferExistingBridge": true,
       "participantRegionPinned": false,

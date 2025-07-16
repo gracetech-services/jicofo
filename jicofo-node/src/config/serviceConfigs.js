@@ -99,7 +99,8 @@ const BridgeConfig = {
         return {
             healthChecksEnabled: bridgeConf.healthChecksEnabled !== false, // Default to true
             breweryJid: JidUtils.entityBareFrom(bridgeConf.breweryJid) || null, // e.g., "jvbbrewery.example.com"
-            xmppConnectionName: bridgeConf.xmppConnectionName || 'service'
+            xmppConnectionName: bridgeConf.xmppConnectionName || 'service',
+            selectionStrategy: bridgeConf.selectionStrategy || 'region'
         };
     }
 };

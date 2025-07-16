@@ -42,7 +42,7 @@ class JicofoServices {
         });
         this.xmppServices.clientConnection.addListener(this.focusManager); // FocusManager listens to XMPP client
 
-        this.bridgeSelector = new BridgeSelector();
+        this.bridgeSelector = new BridgeSelector({ strategyConfig: BridgeConfig.config.selectionStrategy });
 
         if (BridgeConfig.config.healthChecksEnabled) {
             this.jvbDoctor = new JvbDoctor(this.bridgeSelector, this.xmppServices.getXmppConnectionByName(BridgeConfig.config.xmppConnectionName));
