@@ -12,7 +12,7 @@ curl -s -w "\nHTTP %{http_code}\n" "$BASE_URL/about/version"
 # Test /about/health
 echo "\n==> GET /about/health"
 curl -s -w "\nHTTP %{http_code}\n" "$BASE_URL/about/health"
-
+visitors
 # Test /conference-request/v1 (POST)
 echo "\n==> POST /conference-request/v1"
 curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" -X POST \
