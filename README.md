@@ -4,6 +4,14 @@ JItsi COnference FOcus is a signaling server, one of the backend components in t
 
 [Jitsi Meet]: https://github.com/jitsi/jitsi-meet
 
+# Gracetech
+To run it locally, with xmpp localhost
+
+```
+bash ./build.sh
+bash ./run.sh
+```
+
 ## Overview
 
 Jitsi Meet conferences are associated with an XMPP 
