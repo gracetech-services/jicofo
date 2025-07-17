@@ -16,13 +16,15 @@ class BridgeMucDetector {
      * @param {string} breweryMucJid - The JID of the JVB brewery MUC.
      * @param {string} focusMucNickname - The nickname Jicofo should use in the brewery MUC.
      * @param {object} jicofoSrv - Jicofo services for config access.
+     * @param {class} [ChatRoomClass=ChatRoom] - The ChatRoom class to use (for testing).
      */
-    constructor(xmppConnection, bridgeSelector, breweryMucJid, focusMucNickname, jicofoSrv) {
+    constructor(xmppConnection, bridgeSelector, breweryMucJid, focusMucNickname, jicofoSrv, ChatRoomClass = ChatRoom) {
         this.xmppConnection = xmppConnection;
         this.bridgeSelector = bridgeSelector;
         this.breweryMucJid = JidUtils.entityBareFrom(breweryMucJid);
         this.focusMucNickname = focusMucNickname || 'jicofo-detector';
         this.jicofoSrv = jicofoSrv; // For config if needed for parsing hints
+        this.ChatRoomClass = ChatRoomClass; // Store the ChatRoom class for use in start()
 
         this.logger = loggerModule.child({ component: 'BridgeMucDetector', muc: this.breweryMucJid });
 
@@ -41,7 +43,7 @@ class BridgeMucDetector {
         }
 
         this.logger.info(`Starting and joining brewery MUC: ${this.breweryMucJid}`);
-        this.chatRoom = new ChatRoom(
+        this.chatRoom = new this.ChatRoomClass(
             this.breweryMucJid,
             this.xmppConnection,
             this.focusMucNickname,

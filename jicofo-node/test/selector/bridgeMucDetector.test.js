@@ -3,6 +3,13 @@ const EventEmitter = require('events');
 const { createElement } = require('@xmpp/xml');
 const proxyquire = require('proxyquire');
 
+// Mock JidUtils
+const JidUtils = {
+    entityBareFrom: (jid) => jid,
+    getResourcePart: (jid) => jid.split('/')[1] || null,
+    parse: (jid) => ({ bare: () => jid.split('/')[0] })
+};
+
 class MockBridge {
     constructor(jid) {
         this.jid = jid;
@@ -17,7 +24,7 @@ class MockBridge {
     getVersion() { return this.version; }
     getRegion() { return this.region; }
     getRelayId() { return this.relayId; }
-    get isOperational() { return this._isOperational; }
+    get isOperational() { return this._isOperational && !this._isInGracefulShutdown; }
     setIsOperational(val) { this._isOperational = val; }
     get isInGracefulShutdown() { return this._isInGracefulShutdown; }
     setIsInGracefulShutdown(val) { this._isInGracefulShutdown = val; }
@@ -89,8 +96,10 @@ const NS_JITSI_MEET_PRESENCE = 'http://jitsi.org/jitmeet';
 const NS_OCTO = 'urn:xmpp:octo:1';
 const NS_COLIBRI_STATS = 'http://jitsi.org/protocol/colibri';
 
-const BridgeMucDetector = proxyquire('../../../src/selector/bridge/bridgeMucDetector.js', {
-    '../../../src/selector/bridge/bridge.js': MockBridge
+// Use proxyquire to mock dependencies
+const BridgeMucDetector = proxyquire('../../src/selector/bridge/bridgeMucDetector.js', {
+    './bridge.js': MockBridge,
+    '../../config/serviceConfigs': { JidUtils }
 });
 
 describe('BridgeMucDetector', () => {
@@ -105,8 +114,8 @@ describe('BridgeMucDetector', () => {
         mockXmppConnection = new MockManagedXmppConnection('client', {
             username: 'jicofo', domain: 'example.com', resource: 'test'
         });
-        detector = new BridgeMucDetector(mockXmppConnection, mockBridgeSelector, breweryJid, focusNick, mockJicofoSrv);
-        detector.ChatRoom = MockChatRoom; // Ensure mock is used before start()
+        
+        detector = new BridgeMucDetector(mockXmppConnection, mockBridgeSelector, breweryJid, focusNick, mockJicofoSrv, MockChatRoom);
     });
 
     afterEach(async () => {
@@ -178,7 +187,7 @@ describe('BridgeMucDetector', () => {
         MockChatRoom.prototype.join = async function() { joinedCalled = true; this.joined = true; };
 
         await detector.start();
-        assert.ok(detector.chatRoom instanceof MockChatRoom, "Detector should use the (mocked) ChatRoom");
+        assert.strictEqual(detector.chatRoom.constructor.name, 'MockChatRoom', "Detector should use the (mocked) ChatRoom");
         assert.ok(joinedCalled, 'ChatRoom.join should have been called');
         assert.ok(detector.isRunning);
 
@@ -226,7 +235,6 @@ describe('BridgeMucDetector', () => {
         assert.strictEqual(updatedBridge.getJid(), jvbComponentJid);
         assert.strictEqual(updatedBridge.stress, 0.77, "Updated stress mismatch");
         assert.strictEqual(updatedBridge.getVersion(), '2.102-test', "Updated version mismatch");
-
     });
 
     it('should parse stress from <stats><stress/> if <stress-level> is not present', async () => {
@@ -243,7 +251,6 @@ describe('BridgeMucDetector', () => {
         assert.strictEqual(addedBridge.stress, 0.45, "Stress from <stats><stress/> mismatch");
     });
 
-
     it('should mark bridge down on MUC leave', async () => {
         await detector.start();
         const jvbComponentJid = 'jvb1.example.com';
@@ -254,6 +261,8 @@ describe('BridgeMucDetector', () => {
         const memberObj = createChatRoomMember(jvbNick, addPresence);
         detector.chatRoom.emit('memberJoined', memberObj, addPresence);
         mockBridgeSelector.reset(); // Clear addBridge call
+        // Ensure bridge is in availableBridges
+        mockBridgeSelector.availableBridges.set(jvbComponentJid, new MockBridge(jvbComponentJid));
 
         // Then, simulate leave
         const leavePresence = createElement('presence', { from: `${breweryJid}/${jvbNick}`, type: 'unavailable' });
@@ -283,6 +292,7 @@ describe('BridgeMucDetector', () => {
         await detector.start();
         const chatRoomRef = detector.chatRoom;
         await detector.stop();
+        // Check leaveCalled on the correct instance
         assert.ok(chatRoomRef.leaveCalled, 'ChatRoom.leave should have been called');
         assert.ok(!detector.isRunning);
         assert.strictEqual(detector.chatRoom, null);

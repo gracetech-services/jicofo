@@ -450,16 +450,29 @@ class ColibriV2SessionManager extends EventEmitter {
 
 
     // --- Octo/Relay methods (stubs for now) ---
+    /**
+     * Add a relay/mesh link between two sessions.
+     * @param {Colibri2Session} session
+     * @param {Colibri2Session} otherSession
+     * @param {string} meshId
+     */
     addLinkBetween(session, otherSession, meshId) {
-        this.logger.info(`Octo: Add link between ${session.bridge.getJid()} and ${otherSession.bridge.getJid()} for mesh ${meshId}`);
-        // const participantsBehindSession = ... getNodesBehind ... getVisibleSessionParticipants ...
-        // const participantsBehindOtherSession = ...
-        // session.createRelay(otherSession.relayId, participantsBehindOtherSession, true, meshId);
-        // otherSession.createRelay(session.relayId, participantsBehindSession, false, meshId);
+        this.logger.info(`Adding relay link between session ${session.id} and ${otherSession.id} (meshId=${meshId})`);
+        // Create relays in both sessions
+        session.createRelay(otherSession.relayId, [], true, meshId);
+        otherSession.createRelay(session.relayId, [], false, meshId);
+        // TODO: Add logic to update participants behind each session if needed
     }
+    /**
+     * Remove a relay/mesh link between two sessions.
+     * @param {Colibri2Session} session
+     * @param {Colibri2Session} otherSession
+     */
     removeLinkTo(session, otherSession) {
-        this.logger.info(`Octo: Remove link from ${session.bridge.getJid()} to ${otherSession.bridge.getJid()}`);
-        // otherSession.relayId?.let { session.expireRelay(it); }
+        this.logger.info(`Removing relay link from session ${session.id} to ${otherSession.id}`);
+        // Remove relay from session
+        session.relays.delete(otherSession.relayId);
+        // TODO: Add logic to expire remote participants if needed
     }
     setRelayTransport(session, transport, relayId) { // session is the one that received transport for its relay
         this.logger.info(`Octo: Set relay transport from ${session.bridge.getJid()} for relay ${relayId}`);
