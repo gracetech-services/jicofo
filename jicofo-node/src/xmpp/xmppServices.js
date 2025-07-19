@@ -3,6 +3,7 @@ const { client, xml } = require('@xmpp/client'); // Using @xmpp/client
 const EventEmitter = require('events');
 const conferenceStore = require('../common/conferenceStore');
 const JingleIqRequestHandler = require('../common/xmpp/jingle/jingleIqRequestHandler');
+const { ComponentDiscovery } = require('./componentDiscovery');
 
 // Wrapper for @xmpp/client to somewhat mimic the XmppConnection interface used elsewhere
 // and to manage Jicofo-specific needs like listeners for registration changes.
@@ -59,6 +60,19 @@ class ManagedXmppConnection extends EventEmitter {
             // Send initial presence or other setup if needed
             await this.xmpp.send(xml('presence'));
             this._updateRegistrationStatus(true);
+            
+            // Initialize component discovery if domain is configured
+            if (this.config.domain) {
+                logger.info(`Will discover components for ${this.config.domain}`);
+                this.componentDiscovery = new ComponentDiscovery(this);
+                // Discover components asynchronously
+                this.componentDiscovery.discoverComponents(this.config.domain).catch(err => {
+                    logger.error(`Failed to discover components for ${this.config.domain}:`, err);
+                });
+            } else {
+                logger.info('No domain configured, will not discover components.');
+            }
+            
             // Setup AV moderation XMPP message handler
             setupAvModerationHandler(this, this.conferenceStore);
             setupConferenceIqHandler(this, this.conferenceStore);
@@ -413,6 +427,58 @@ class ManagedXmppConnection extends EventEmitter {
             }
         });
         logger.info(`XMPP Connection "${this.name}": Initialized IQ processing.`);
+    }
+
+    /**
+     * Get the component discovery instance for this connection.
+     * @returns {ComponentDiscovery|null} - The component discovery instance or null if not initialized
+     */
+    getComponentDiscovery() {
+        return this.componentDiscovery || null;
+    }
+
+    /**
+     * Get the current set of discovered components.
+     * @returns {Set<Component>} - Current components
+     */
+    getComponents() {
+        return this.componentDiscovery ? this.componentDiscovery.getComponents() : new Set();
+    }
+
+    /**
+     * Discover components for a given domain.
+     * @param {string} domain - The domain to discover components for
+     * @returns {Promise<Set<Component>>} - Set of discovered components
+     */
+    async discoverComponents(domain) {
+        if (!this.componentDiscovery) {
+            this.componentDiscovery = new ComponentDiscovery(this);
+        }
+        return this.componentDiscovery.discoverComponents(domain);
+    }
+
+    /**
+     * Discover features for a specific JID.
+     * @param {string} jid - The JID to discover features for
+     * @returns {Promise<Set<string>>} - Set of feature strings
+     */
+    async discoverFeatures(jid) {
+        if (!this.componentDiscovery) {
+            this.componentDiscovery = new ComponentDiscovery(this);
+        }
+        return this.componentDiscovery.discoverFeatures(jid);
+    }
+
+    /**
+     * Check if a component is a JVB based on its features.
+     * @param {string} jid - The JID to check
+     * @returns {Promise<boolean>} - True if the component is a JVB
+     */
+    async isJvbComponent(jid) {
+        if (!this.componentDiscovery) {
+            this.componentDiscovery = new ComponentDiscovery(this);
+        }
+        return this.componentDiscovery.isJvbComponent(jid);
     }
 }
 

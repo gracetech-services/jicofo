@@ -12,6 +12,7 @@ const ApiService = require('./api/index'); // Ktor equivalent
 const { JicofoMetricsContainer, GlobalMetrics } = require('./metrics/metricsContainer');
 const { AuthConfig, BridgeConfig, JibriConfig, HealthConfig, RestConfig, JidUtils } = require('./config/serviceConfigs');
 const BridgeMucDetectorReal = require('./selector/bridge/bridgeMucDetector'); // Renamed to avoid conflict with property name
+const BridgeComponentDetector = require('./selector/bridge/bridgeComponentDetector');
 
 // TODO: CurrentVersionImpl equivalent for versioning
 const CurrentVersionImpl = { VERSION: '0.0.1-node' };
@@ -64,6 +65,20 @@ class JicofoServices {
         } else {
             logger.error('No Bridge MUC Detector configured (missing bridge.breweryJid in config).');
             this.bridgeMucDetector = null;
+        }
+
+        // Initialize bridge component detector for component discovery
+        const xmppDomain = this.xmppServices.clientConnection.config.domain;
+        if (xmppDomain) {
+            this.bridgeComponentDetector = new BridgeComponentDetector(
+                this.xmppServices.clientConnection,
+                this.bridgeSelector,
+                xmppDomain
+            );
+            logger.info(`Bridge component detector initialized for domain: ${xmppDomain}`);
+        } else {
+            logger.warn('No XMPP domain configured, bridge component detector not initialized.');
+            this.bridgeComponentDetector = null;
         }
 
         if (JibriConfig.config.breweryJid) {
@@ -182,6 +197,7 @@ class JicofoServices {
             .then(() => {
                 // Start detectors that rely on XMPP being connected
                 this.bridgeMucDetector?.start(); // Start the BridgeMucDetector
+                this.bridgeComponentDetector?.start(); // Start the BridgeComponentDetector
                 this.jibriDetector?.init(); // Assuming init joins MUCs, might need similar async start
                 this.sipJibriDetector?.init();
             })
@@ -216,6 +232,7 @@ class JicofoServices {
             this.jvbDoctor.shutdown();
         }
         this.bridgeDetector?.shutdown();
+        this.bridgeComponentDetector?.stop(); // Stop the bridge component detector
         this.jibriDetector?.shutdown();
         this.sipJibriDetector?.shutdown();
 
@@ -264,6 +281,7 @@ class JicofoServices {
         return {
             focus_manager: this.focusManager?.getDebugState(full) || {},
             bridge_selector: this.bridgeSelector?.debugState || {},
+            bridge_component_detector: this.bridgeComponentDetector?.getDebugState() || {},
             jibri_detector: this.jibriDetector?.debugState || "null",
             sip_jibri_detector: this.sipJibriDetector?.debugState || "null",
             jigasi_detector: this.xmppServices?.jigasiDetector?.debugState || "null",
