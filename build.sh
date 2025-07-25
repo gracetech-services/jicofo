@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
-# Build all Maven modules in the project, keeping artifacts in the project directory
-mvn clean package
+# Build and install all Maven modules so dependencies are available locally
+mvn clean install
 
-# Copy all runtime dependencies for the main jicofo module
+# Build the main jicofo module and copy all runtime dependencies
 cd jicofo
+mvn package
 mvn dependency:copy-dependencies -DoutputDirectory=target/dependency
 cd ..
 
