@@ -1,0 +1,119 @@
+{
+  "jicofo": {
+    "version": "0.0.1-node",
+
+    "xmpp": {
+      "client": {
+        "service": "xmpp://localhost:5222",
+        "domain": "yourdomain.com",
+        "username": "jicofo_client",
+        "password": "client_password",
+        "resource": "jicofoNodeClient",
+        "connectionTimeout": 15000
+      },
+      "service": {
+        "service": "xmpp://localhost:5222",
+        "domain": "yourdomain.com",
+        "username": "jicofo_service",
+        "password": "service_password",
+        "resource": "jicofoNodeService",
+        "connectionTimeout": 15000
+      }
+    },
+
+    "auth": {
+      "type": "NONE",
+      "enableAutoLogin": false,
+      "authenticationLifetime": 3600000,
+      "loginUrl": "auth.yourdomain.com"
+    },
+
+    "bridge": {
+      "healthChecksEnabled": true,
+      "breweryJid": "jvbbrewery.yourdomain.com",
+      "xmppConnectionName": "service",
+      "selectionStrategy": "region",
+      "maxBridgeStress": 0.85,
+      "preferExistingBridge": true,
+      "participantRegionPinned": false,
+      "allowSelectionIfNoPinnedMatch": false,
+      "allowSelectionIfNoRegionalMatch": true
+    },
+
+    "jibri": {
+      "breweryJid": "jibribrewery.yourdomain.com",
+      "sipBreweryJid": "sipjibribrewery.yourdomain.com",
+      "xmppConnectionName": "client",
+      "pendingTimeout": 90
+    },
+
+    "health": {
+      "enabled": true,
+      "interval": 10000,
+      "timeout": 5000,
+      "maxPeriod": 30000
+    },
+
+    "rest": {
+      "enabled": true,
+      "port": 8080,
+      "host": "0.0.0.0"
+    },
+
+    "conference": {
+      "minParticipants": 1,
+      "singleParticipantTimeoutMs": 120000,
+      "conferenceStartTimeoutMs": 30000,
+      "startAudioMuted": 0,
+      "startVideoMuted": 0,
+      "maxAudioSenders": 10,
+      "maxVideoSenders": 10,
+      "useRandomSharedDocumentName": true,
+      "rtcStatsEnabled": false,
+      "maxSsrcsPerUser": 20,
+      "maxSsrcGroupsPerUser": 20,
+      "stripSimulcast": true,
+      "enableSctp": true
+    },
+
+    "focusUser": {
+        "nickname": "Focus"
+    },
+
+    "jingle": {
+      "codecs": {
+        "audio": [
+          { "id": 111, "name": "opus", "clockrate": 48000, "channels": 2, "parameters": { "minptime": "10", "useinbandfec": "1" } },
+          { "id": 0, "name": "PCMU", "clockrate": 8000 },
+          { "id": 8, "name": "PCMA", "clockrate": 8000 },
+          { "id": 103, "name": "ISAC", "clockrate": 16000 },
+          { "id": 104, "name": "ISAC", "clockrate": 32000 },
+          { "id": 9, "name": "G722", "clockrate": 8000 },
+          { "id": 126, "name": "telephone-event", "clockrate": 8000 }
+        ],
+        "video": [
+          { "id": 100, "name": "VP8", "clockrate": 90000 },
+          { "id": 107, "name": "VP9", "clockrate": 90000 },
+          { "id": 120, "name": "rtx", "clockrate": 90000, "parameters": { "apt": "100"} },
+          { "id": 125, "name": "rtx", "clockrate": 90000, "parameters": { "apt": "107"} }
+        ]
+      },
+      "rtpHdrExts": {
+        "audio": [
+          { "id": 1, "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level" }
+        ],
+        "video": [
+          { "id": 2, "uri": "urn:ietf:params:rtp-hdrext:toffset" },
+          { "id": 3, "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time" },
+          { "id": 4, "uri": "urn:ietf:params:rtp-hdrext:sdes:mid" },
+          { "id": 5, "uri": "urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id" },
+          { "id": 12, "uri": "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay" }
+        ]
+      },
+      "initialLastN": {
+        "audio": -1, "video": -1
+      },
+      "encodeSourcesAsJson": false
+    }
+  }
+}

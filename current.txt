@@ -1,0 +1,42 @@
+That's an excellent question. Based on my understanding of the original Java/Kotlin codebase and what has been implemented so far in Node.js, here's a high-level overview of major components that are likely still missing or incomplete:
+
+1. Conference Logic & Advanced Features:
+
+Conference-Destroy/Expiration Logic: The Java version has sophisticated logic for expiring conferences, including timeouts when a conference is empty for a certain period or when a single participant is left alone. This logic (e.g., SingleParticipantTimeout, ConferenceExpireTask) is likely not fully implemented.
+AV Moderation: Handling for audio/video moderation commands (e.g., mute/unmute all) via MUC presence or IQs (AvModerationHandler).
+My MUC Presence: I maintain a presence in the MUC, signaling my status and capabilities. While the Node.js version joins the MUC, the full set of presence extensions and status updates might be missing.
+Recording (Jibri) Integration: While JibriDetector exists to find Jibris, the full application logic for starting/stopping recordings, handling Jibri status updates, and managing recording sessions is a large, unconverted feature.
+SIP/PSTN (Jigasi) Integration: Similar to Jibri, while a JigasiDetector might exist, the logic to handle SIP calls and manage Jigasi sessions is another major component.
+Authentication & Authorization: The stubs for AuthenticationAuthority exist, but the complete logic for handling different authentication strategies (e.g., XMPP, JWT, Shibboleth) and managing user roles/rights within a conference is likely incomplete.
+2. Bridge & Selector Logic::
+
+Colibri/Octo Relays: The current implementation focuses on a single-bridge (ColibriV2SessionManager). The logic for multi-bridge conferences using Octo for inter-bridge relays is a significant and complex feature that is almost certainly not converted.
+JVB Health Checks (JvbDoctor): While a placeholder file exists, the full implementation of sending health-check IQs to bridges, interpreting the results, and marking bridges as unhealthy in the BridgeSelector is probably not complete.
+Advanced Bridge Selection Strategies: The current selector is likely basic (e.g., based on stress). The Java version has more advanced strategies, including region-based selection, version preferences, and draining bridges gracefully.
+3. XMPP & IQ Handling:
+
+Specific IQ Handlers: Many specific IQ handlers 
+from the Java version are likely missing. 
+This includes handlers for conference-specific IQs, 
+stats requests, and various custom protocols Jitsi uses.
+
+Component Connections: I can connect to XMPP 
+as an external component. While the Node.js version 
+has client connections, the full logic for acting 
+as a component and handling component-level IQ 
+routing might be missing.
+4. Operational & Support Features:
+
+REST API: An ApiService placeholder exists, but the full set of REST API endpoints for stats, debugging (/debug state), and administration is likely not implemented.
+Metrics: While MetricsContainer exists, many of the specific metrics gathered throughout the Java codebase have likely not been instrumented in the Node.js version.
+Graceful Shutdown: A complete graceful shutdown sequence, which ensures all conferences are properly terminated and bridges are notified before the process exits, needs to be fully implemented.
+In summary, the core of establishing a single conference on a single bridge has been the focus. The next major areas would be expanding to multi-bridge/Octo support, implementing recording/SIP features, and building out the operational components like the REST API and advanced health checks.
+
+What area would you like to prioritize next?
+
+
+/// To run jicofo the java build locally
+1. mvn compile, build, and last mvn install
+2. sudo cp ./jicofo-selector/src/main/resources/reference.conf /etc/jitsi/jicofo.conf 
+3. export JAVA_SYS_PROPS="-Dconfig.file=/etc/jitsi/jicofo.conf"
+4. ./local_build/jicofo-1.1-SNAPSHOT/jicofo.sh OR ./jicofo/resources/jicofo.sh
