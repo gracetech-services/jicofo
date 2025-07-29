@@ -47,7 +47,6 @@ import org.jitsi.xmpp.extensions.jingle.IceUdpTransportPacketExtension
 import org.jitsi.xmpp.extensions.jingle.JingleAction
 import org.jitsi.xmpp.extensions.jingle.JingleIQ
 import org.jitsi.xmpp.extensions.jingle.RtpDescriptionPacketExtension
-import org.jitsi.xmpp.util.XmlStringBuilderUtil.Companion.toStringOpt
 import org.jivesoftware.smack.packet.IQ
 import org.jxmpp.jid.Jid
 import org.jxmpp.jid.impl.JidCreate
@@ -72,6 +71,7 @@ class ConferenceTest : ShouldSpec() {
         roomName,
         mockk {
             every { conferenceEnded(any()) } answers { ended = true }
+            every { meetingIdSet(any(), any()) } returns true
         },
         HashMap(),
         Level.INFO,
@@ -258,8 +258,18 @@ class ConferenceTest : ShouldSpec() {
             val members = addParticipants(2)
             val muter = members[0].getParticipant()!!
             val mutee = members[1].getParticipant()!!
-            fun mute() = conference.handleMuteRequest(muter.mucJid, mutee.mucJid, true, MediaType.AUDIO)
-            fun unmute() = conference.handleMuteRequest(muter.mucJid, mutee.mucJid, false, MediaType.VIDEO)
+            fun mute() = conference.handleMuteRequest(
+                muter.mucJid,
+                mutee.mucJid,
+                true,
+                org.jitsi.jicofo.MediaType.AUDIO
+            )
+            fun unmute() = conference.handleMuteRequest(
+                muter.mucJid,
+                mutee.mucJid,
+                false,
+                org.jitsi.jicofo.MediaType.VIDEO
+            )
 
             context("When the muter is an owner") {
                 every { muter.chatMember.role } returns MemberRole.OWNER
@@ -402,7 +412,7 @@ class ColibriAndJingleXmppConnection : MockXmppConnection() {
         is ConferenceModifyIQ -> colibri2Server.handleConferenceModifyIq(iq)
         is JingleIQ -> remoteParticipants.computeIfAbsent(iq.to) { RemoteParticipant(iq.to) }.handleJingleIq(iq)
         else -> {
-            println("Not handling ${iq.toStringOpt()}")
+            println("Not handling ${iq.toXML()}")
             null
         }
     }.also {

@@ -18,12 +18,14 @@
 package org.jitsi.jicofo.conference;
 
 import org.jetbrains.annotations.*;
+import org.jitsi.jicofo.MediaType;
 import org.jitsi.jicofo.bridge.*;
 import org.jitsi.jicofo.jibri.*;
 import org.jitsi.jicofo.xmpp.*;
 import org.jitsi.jicofo.xmpp.muc.*;
 import org.jitsi.utils.*;
 import org.jitsi.xmpp.extensions.jibri.*;
+import org.jivesoftware.smack.packet.*;
 import org.jxmpp.jid.*;
 
 import java.util.*;
@@ -125,8 +127,9 @@ public interface JitsiMeetConference extends XmppProvider.Listener
     /**
      * Used for av moderation, when we want to mute all participants.
      * @param mediaType the media type we want to mute.
+     * @param actor the entity that requested the mute.
      */
-    void muteAllParticipants(MediaType mediaType);
+    void muteAllParticipants(MediaType mediaType, EntityFullJid actor);
 
     /**
      * Return {@code true} if the user with the given JID should be allowed to invite jigasi to this conference.
@@ -172,4 +175,12 @@ public interface JitsiMeetConference extends XmppProvider.Listener
 
     /** Get information about the bridges currently used by this conference. */
     Map<Bridge, ConferenceBridgeProperties> getBridges();
+
+    boolean isStarted();
+
+    @Nullable
+    String redirectVisitor(boolean visitorRequested, @Nullable String userId, @Nullable String groupId)
+            throws Exception;
+
+    void setPresenceExtension(@NotNull ExtensionElement extension);
 }

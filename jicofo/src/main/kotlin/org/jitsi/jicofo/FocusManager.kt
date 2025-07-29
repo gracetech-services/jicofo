@@ -63,6 +63,7 @@ class FocusManager(
      */
     private val conferences: MutableMap<EntityBareJid, JitsiMeetConferenceImpl> = ConcurrentHashMap()
     private val conferencesCache: MutableList<JitsiMeetConference> = CopyOnWriteArrayList()
+    private val conferencesByMeetingId: MutableMap<String, JitsiMeetConferenceImpl> = ConcurrentHashMap()
 
     /** The object used to synchronize access to [.conferences]. */
     private val conferencesSyncRoot = Any()
@@ -95,7 +96,7 @@ class FocusManager(
         loggingLevel: Level = Level.ALL,
         /** Whether this conference should be included in statistics. */
         includeInStatistics: Boolean = true
-    ): Boolean {
+    ): JitsiMeetConference {
         var conference: JitsiMeetConferenceImpl
         var isConferenceCreator: Boolean
         synchronized(conferencesSyncRoot) {
@@ -111,7 +112,7 @@ class FocusManager(
             logger.warn("Exception while trying to start the conference", e)
             throw e
         }
-        return conference.isStarted
+        return conference
     }
 
     /** Creates a new conference and registers it in [conferences]. */
@@ -149,6 +150,7 @@ class FocusManager(
         synchronized(conferencesSyncRoot) {
             conferences.remove(roomName)
             conferencesCache.remove(conference)
+            conferencesByMeetingId.remove(conference.meetingId)
             if (conference.includeInStatistics()) {
                 ConferenceMetrics.conferenceCount.dec()
             }
@@ -171,8 +173,21 @@ class FocusManager(
         }
     }
 
+    override fun meetingIdSet(conference: JitsiMeetConferenceImpl, meetingId: String): Boolean =
+        synchronized(conferencesSyncRoot) {
+            conferencesByMeetingId[meetingId]?.let {
+                // If there is already a conference with this meeting ID, we don't allow setting it.
+                logger.warn("Meeting ID $meetingId already exists for ${it.roomName}.")
+                false
+            } ?: run {
+                // Otherwise, we set the meeting ID and register the conference.
+                conferencesByMeetingId[meetingId] = conference
+                true
+            }
+        }
+
     /** {@inheritDoc} */
-    override fun getConference(jid: EntityBareJid): JitsiMeetConferenceImpl? = synchronized(conferencesSyncRoot) {
+    override fun getConference(jid: EntityBareJid): JitsiMeetConference? = synchronized(conferencesSyncRoot) {
         return conferences[jid]
     }
 

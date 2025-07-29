@@ -27,13 +27,11 @@ import org.jitsi.jicofo.jigasi.*;
 import org.jitsi.jicofo.util.*;
 import org.jitsi.jicofo.xmpp.jingle.*;
 import org.jitsi.jicofo.xmpp.muc.*;
-import org.jitsi.utils.*;
 import org.jitsi.xmpp.extensions.colibri2.*;
 import org.jitsi.xmpp.extensions.jingle.*;
 import org.jitsi.xmpp.extensions.jingle.JingleUtils;
 import org.jitsi.xmpp.extensions.jitsimeet.*;
 import org.jitsi.utils.logging2.*;
-import org.jitsi.xmpp.util.*;
 import org.jivesoftware.smack.*;
 import org.jivesoftware.smack.packet.*;
 import org.jxmpp.jid.*;
@@ -188,9 +186,7 @@ public class ParticipantInviteRunnable implements Runnable, Cancelable
                 }
                 else
                 {
-                    logger.warn(
-                            "Failed to convert ContentPacketExtension to Media: "
-                                    + XmlStringBuilderUtil.toStringOpt(content));
+                    logger.warn("Failed to convert ContentPacketExtension to Media: " + content.toXML());
                 }
             });
             // This makes the bridge signal its private host candidates. We enable them for backend components, because

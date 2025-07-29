@@ -18,15 +18,16 @@
 package org.jitsi.jicofo.xmpp
 
 import org.jitsi.jicofo.ConferenceStore
+import org.jitsi.jicofo.MediaType
 import org.jitsi.jicofo.TaskPools
 import org.jitsi.jicofo.conference.MuteResult
 import org.jitsi.jicofo.xmpp.IqProcessingResult.AcceptedWithNoResponse
 import org.jitsi.jicofo.xmpp.IqProcessingResult.RejectedWithError
-import org.jitsi.utils.MediaType
 import org.jitsi.utils.logging2.LoggerImpl
+import org.jitsi.xmpp.extensions.jitsimeet.AbstractMuteIq
+import org.jitsi.xmpp.extensions.jitsimeet.MuteDesktopIq
 import org.jitsi.xmpp.extensions.jitsimeet.MuteIq
 import org.jitsi.xmpp.extensions.jitsimeet.MuteVideoIq
-import org.jitsi.xmpp.util.XmlStringBuilderUtil.Companion.toStringOpt
 import org.jivesoftware.smack.AbstractXMPPConnection
 import org.jivesoftware.smack.iqrequest.IQRequestHandler
 import org.jivesoftware.smack.packet.IQ
@@ -39,7 +40,7 @@ class AudioMuteIqHandler(
 ) :
     AbstractIqHandler<MuteIq>(
         connections,
-        MuteIq.ELEMENT,
+        AbstractMuteIq.ELEMENT,
         MuteIq.NAMESPACE,
         setOf(IQ.Type.set),
         IQRequestHandler.Mode.sync
@@ -64,7 +65,7 @@ class VideoMuteIqHandler(
 ) :
     AbstractIqHandler<MuteVideoIq>(
         connections,
-        MuteVideoIq.ELEMENT,
+        AbstractMuteIq.ELEMENT,
         MuteVideoIq.NAMESPACE,
         setOf(IQ.Type.set),
         IQRequestHandler.Mode.sync
@@ -83,6 +84,31 @@ class VideoMuteIqHandler(
     }
 }
 
+class DesktopMuteIqHandler(
+    connections: Set<AbstractXMPPConnection>,
+    private val conferenceStore: ConferenceStore
+) :
+    AbstractIqHandler<MuteDesktopIq>(
+        connections,
+        AbstractMuteIq.ELEMENT,
+        MuteDesktopIq.NAMESPACE,
+        setOf(IQ.Type.set),
+        IQRequestHandler.Mode.sync
+    ) {
+    override fun handleRequest(request: IqRequest<MuteDesktopIq>): IqProcessingResult {
+        return handleRequest(
+            MuteRequest(
+                request.iq,
+                request.connection,
+                conferenceStore,
+                request.iq.mute,
+                request.iq.jid,
+                MediaType.DESKTOP
+            )
+        )
+    }
+}
+
 private val logger = LoggerImpl("org.jitsi.jicofo.xmpp.MuteIqHandler")
 
 private fun handleRequest(request: MuteRequest): IqProcessingResult {
@@ -90,13 +116,13 @@ private fun handleRequest(request: MuteRequest): IqProcessingResult {
     val doMute = request.doMute
     val mediaType = request.mediaType
     if (doMute == null || jidToMute == null) {
-        logger.warn("Mute request missing required fields: ${request.iq.toStringOpt()}")
+        logger.warn("Mute request missing required fields: ${request.iq.toXML()}")
         return RejectedWithError(request.iq, StanzaError.Condition.bad_request)
     }
 
     val conference = request.conferenceStore.getConference(request.iq.from.asEntityBareJidIfPossible())
         ?: return RejectedWithError(request.iq, StanzaError.Condition.item_not_found).also {
-            logger.warn("Mute request for unknown conference: ${request.iq.toStringOpt()}")
+            logger.warn("Mute request for unknown conference: ${request.iq.toXML()}")
         }
 
     TaskPools.ioPool.execute {
@@ -107,20 +133,11 @@ private fun handleRequest(request: MuteRequest): IqProcessingResult {
                     // If this was a remote mute, notify the participant that was muted.
                     if (request.iq.from != request.jidToMute) {
                         request.connection.tryToSendStanza(
-                            if (request.mediaType == MediaType.AUDIO) {
-                                MuteIq().apply {
-                                    actor = request.iq.from
-                                    type = IQ.Type.set
-                                    to = request.jidToMute
-                                    mute = request.doMute
-                                }
-                            } else {
-                                MuteVideoIq().apply {
-                                    actor = request.iq.from
-                                    type = IQ.Type.set
-                                    to = request.jidToMute
-                                    mute = request.doMute
-                                }
+                            createMuteIq(mediaType).apply {
+                                actor = request.iq.from
+                                type = IQ.Type.set
+                                to = request.jidToMute
+                                mute = request.doMute
                             }
                         )
                     }
@@ -139,7 +156,7 @@ private fun handleRequest(request: MuteRequest): IqProcessingResult {
                 )
             }
         } catch (e: Exception) {
-            logger.warn("Failed to handle mute request: ${request.iq.toStringOpt()}", e)
+            logger.warn("Failed to handle mute request: ${request.iq.toXML()}", e)
             request.connection.tryToSendStanza(
                 IQ.createErrorResponse(request.iq, StanzaError.Condition.internal_server_error)
             )
@@ -157,3 +174,10 @@ private data class MuteRequest(
     val jidToMute: Jid?,
     val mediaType: MediaType
 )
+
+fun createMuteIq(mediaType: MediaType) = when (mediaType) {
+    MediaType.AUDIO -> MuteIq()
+    MediaType.VIDEO -> MuteVideoIq()
+    MediaType.DESKTOP -> MuteDesktopIq()
+    else -> throw IllegalArgumentException("Unsupported media type: $mediaType")
+}

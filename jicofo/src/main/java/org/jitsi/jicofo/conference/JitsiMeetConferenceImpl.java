@@ -17,8 +17,10 @@
  */
 package org.jitsi.jicofo.conference;
 
+import kotlin.*;
 import org.jetbrains.annotations.*;
 import org.jitsi.jicofo.*;
+import org.jitsi.jicofo.MediaType;
 import org.jitsi.jicofo.auth.*;
 import org.jitsi.jicofo.bridge.*;
 import org.jitsi.jicofo.bridge.colibri.*;
@@ -47,6 +49,7 @@ import org.jivesoftware.smackx.caps.*;
 import org.jivesoftware.smackx.caps.packet.*;
 import org.jxmpp.jid.*;
 
+import javax.xml.namespace.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -56,6 +59,8 @@ import java.util.stream.*;
 
 import static org.jitsi.jicofo.conference.ConferenceUtilKt.getVisitorMucJid;
 import static org.jitsi.jicofo.xmpp.IqProcessingResult.*;
+import static org.apache.commons.lang3.StringUtils.isBlank;
+import static org.jitsi.jicofo.xmpp.MuteIqHandlerKt.createMuteIq;
 
 /**
  * Represents a Jitsi Meet conference. Manages the Jingle sessions with the
@@ -225,6 +230,9 @@ public class JitsiMeetConferenceImpl
 
     @NotNull private final JicofoServices jicofoServices;
 
+    /** Whether to enable transcription via a colibri export. */
+    private boolean enableTranscription = false;
+
     /**
      * Stores the sources advertised by all participants in the conference, mapped by their JID.
      */
@@ -252,7 +260,7 @@ public class JitsiMeetConferenceImpl
      * Whether broadcasting to visitors is currently enabled.
      * TODO: support changing it.
      */
-    private boolean visitorsBroadcastEnabled = VisitorsConfig.config.getAutoEnableBroadcast();
+    private final boolean visitorsBroadcastEnabled = VisitorsConfig.config.getAutoEnableBroadcast();
 
     @NotNull private final Instant createdInstant = Instant.now();
 
@@ -263,6 +271,9 @@ public class JitsiMeetConferenceImpl
      */
     @Nullable
     private String meetingId;
+
+    /** Presence extensions set from the outside which are to be added to the presence in each MUC. */
+    private final Map<QName, ExtensionElement> presenceExtensions = new ConcurrentHashMap<>();
 
     /**
      * Creates new instance of {@link JitsiMeetConferenceImpl}.
@@ -344,6 +355,7 @@ public class JitsiMeetConferenceImpl
                     getRoomName().toString(),
                     meetingId,
                     config.getRtcStatsEnabled(),
+                    enableTranscription ? TranscriptionConfig.config.getUrl(meetingId) : null,
                     jvbVersion,
                     logger);
             colibriSessionManager.addListener(colibriSessionManagerListener);
@@ -495,11 +507,49 @@ public class JitsiMeetConferenceImpl
     /**
      * Returns <tt>true</tt> if the conference has been successfully started.
      */
+    @Override
     public boolean isStarted()
     {
         return started.get();
     }
 
+    /**
+     * Initialize {@link #meetingId}, given an optional value coming from the chat room configuration. If no valid
+     * meeting ID is provided, a random UUID will be generated.
+     * @param chatRoomMeetingId the meeting ID that was set in the chat room configuration.
+     * @throws RuntimeException if the meeting ID is already in use by another conference.
+     */
+    private void setMeetingId(String chatRoomMeetingId)
+    {
+        if (meetingId != null)
+        {
+            logger.error("Meeting ID is already set: " + meetingId + ", will not replace.");
+            return;
+        }
+
+        String meetingId;
+        if (isBlank(chatRoomMeetingId))
+        {
+            meetingId = UUID.randomUUID().toString();
+            if (includeInStatistics)
+            {
+                logger.warn("No meetingId set for the MUC. Generating one locally.");
+            }
+        }
+        else
+        {
+            meetingId = chatRoomMeetingId;
+        }
+
+        if (!listener.meetingIdSet(this, meetingId))
+        {
+            logger.error("Failed to set a unique meeting ID.");
+            throw new RuntimeException("Failed to set a unique meeting ID.");
+        }
+
+        this.meetingId = meetingId;
+        logger.addContext("meeting_id", meetingId);
+    }
     /**
      * Joins the conference room.
      *
@@ -515,16 +565,7 @@ public class JitsiMeetConferenceImpl
         chatRoom.addListener(chatRoomListener);
 
         ChatRoomInfo chatRoomInfo = chatRoom.join();
-        if (chatRoomInfo.getMeetingId() == null)
-        {
-            meetingId = UUID.randomUUID().toString();
-            logger.warn("No meetingId set for the MUC. Generating one locally.");
-        }
-        else
-        {
-            this.meetingId = chatRoomInfo.getMeetingId();
-        }
-        logger.addContext("meeting_id", meetingId);
+        setMeetingId(chatRoomInfo.getMeetingId());
 
         mainRoomJid = chatRoomInfo.getMainRoomJid();
 
@@ -569,6 +610,7 @@ public class JitsiMeetConferenceImpl
         }
 
         presenceExtensions.add(createConferenceProperties());
+        this.presenceExtensions.forEach((qName, extension) -> presenceExtensions.add(extension));
 
         // updates presence with presenceExtensions and sends it
         chatRoom.addPresenceExtensions(presenceExtensions);
@@ -601,7 +643,29 @@ public class JitsiMeetConferenceImpl
         ChatRoom chatRoom = this.chatRoom;
         if (updatePresence && chatRoom != null && !value.equals(oldValue))
         {
-            chatRoom.setPresenceExtension(createConferenceProperties());
+            ConferenceProperties newProps = createConferenceProperties();
+            chatRoom.setPresenceExtension(newProps);
+
+            for (final ChatRoom visitorChatRoom: visitorChatRooms.values())
+            {
+                visitorChatRoom.setPresenceExtension(newProps);
+            }
+        }
+    }
+
+    @Override
+    public void setPresenceExtension(@NotNull ExtensionElement extension)
+    {
+        presenceExtensions.put(extension.getQName(), extension);
+
+        ChatRoom chatRoom = this.chatRoom;
+        if (chatRoom != null)
+        {
+            chatRoom.setPresenceExtension(extension);
+        }
+        for (final ChatRoom visitorChatRoom: visitorChatRooms.values())
+        {
+            visitorChatRoom.setPresenceExtension(extension);
         }
     }
 
@@ -769,11 +833,11 @@ public class JitsiMeetConferenceImpl
             cancelSingleParticipantTimeout();
 
             // Invite all not invited yet
-            if (participants.size() == 0)
+            if (participants.isEmpty())
             {
                 for (final ChatRoomMember member : chatRoom.getMembers())
                 {
-                    inviteChatMember(member, member == chatRoomMember);
+                    inviteChatMember(member);
                 }
                 for (final ChatRoom visitorChatRoom: visitorChatRooms.values())
                 {
@@ -781,7 +845,7 @@ public class JitsiMeetConferenceImpl
                     {
                         if (member.getRole() == MemberRole.VISITOR)
                         {
-                            inviteChatMember(member, member == chatRoomMember);
+                            inviteChatMember(member);
                         }
                     }
                 }
@@ -789,7 +853,7 @@ public class JitsiMeetConferenceImpl
             // Only the one who has just joined
             else
             {
-                inviteChatMember(chatRoomMember, true);
+                inviteChatMember(chatRoomMember);
             }
         }
     }
@@ -800,11 +864,8 @@ public class JitsiMeetConferenceImpl
      * established and videobridge channels being allocated.
      *
      * @param chatRoomMember the chat member to be invited into the conference.
-     * @param justJoined whether the chat room member should be invited as a
-     * result of just having joined (as opposed to e.g. another participant
-     * joining triggering the invite).
      */
-    private void inviteChatMember(ChatRoomMember chatRoomMember, boolean justJoined)
+    private void inviteChatMember(ChatRoomMember chatRoomMember)
     {
         synchronized (participantLock)
         {
@@ -828,6 +889,10 @@ public class JitsiMeetConferenceImpl
                     features);
 
             ConferenceMetrics.participants.inc();
+            if (!features.contains(Features.START_MUTED_RMD))
+            {
+                ConferenceMetrics.participantsNoStartMutedRmd.inc();
+            }
 
             boolean added = (participants.put(chatRoomMember.getOccupantJid(), participant) == null);
             if (added)
@@ -842,7 +907,7 @@ public class JitsiMeetConferenceImpl
                 }
             }
 
-            inviteParticipant(participant, false, justJoined);
+            inviteParticipant(participant, false, true);
         }
     }
 
@@ -985,7 +1050,7 @@ public class JitsiMeetConferenceImpl
             {
                 rescheduleSingleParticipantTimeout();
             }
-            else if (participants.size() == 0)
+            else if (participants.isEmpty())
             {
                 expireBridgeSessions();
             }
@@ -1085,7 +1150,7 @@ public class JitsiMeetConferenceImpl
     }
 
     @Override
-    public void componentsChanged(Set<XmppProvider.Component> components)
+    public void componentsChanged(@NotNull Set<XmppProvider.Component> components)
     {
     }
 
@@ -1169,13 +1234,18 @@ public class JitsiMeetConferenceImpl
      */
     public void iceFailed(@NotNull Participant participant, String bridgeSessionId)
     {
-        String existingBridgeSessionId = getColibriSessionManager().getBridgeSessionId(participant.getEndpointId());
-        if (Objects.equals(bridgeSessionId, existingBridgeSessionId))
+        Pair<Bridge, String> existingBridgeSession
+                = getColibriSessionManager().getBridgeSessionId(participant.getEndpointId());
+        if (Objects.equals(bridgeSessionId, existingBridgeSession.getSecond()))
         {
             logger.info(String.format(
                     "Received ICE failed notification from %s, bridge-session ID: %s",
                     participant.getEndpointId(),
                     bridgeSessionId));
+            if (existingBridgeSession.getFirst() != null)
+            {
+                existingBridgeSession.getFirst().endpointRequestedRestart();
+            }
             reInviteParticipant(participant);
         }
         else
@@ -1203,10 +1273,16 @@ public class JitsiMeetConferenceImpl
     throws InvalidBridgeSessionIdException
     {
         // TODO: maybe move the bridgeSessionId logic to Participant
-        String existingBridgeSessionId = getColibriSessionManager().getBridgeSessionId(participant.getEndpointId());
-        if (!Objects.equals(bridgeSessionId, existingBridgeSessionId))
+        Pair<Bridge, String> existingBridgeSession
+                = getColibriSessionManager().getBridgeSessionId(participant.getEndpointId());
+        if (!Objects.equals(bridgeSessionId, existingBridgeSession.getSecond()))
         {
             throw new InvalidBridgeSessionIdException(bridgeSessionId + " is not a currently active session");
+        }
+
+        if (reinvite && existingBridgeSession.getFirst() != null)
+        {
+            existingBridgeSession.getFirst().endpointRequestedRestart();
         }
 
         synchronized (participantLock)
@@ -1544,7 +1620,21 @@ public class JitsiMeetConferenceImpl
         logger.info("Will " + (doMute ? "mute" : "unmute") + " " + toBeMutedJid + " on behalf of " + muterJid
             + " for " + mediaType);
 
-        getColibriSessionManager().mute(participant.getEndpointId(), doMute, mediaType);
+        boolean colibriMuteState;
+        MediaType colibriMediaType;
+        if (mediaType == MediaType.AUDIO)
+        {
+            colibriMuteState = !chatRoom.isMemberAllowedToUnmute(toBeMutedJid, MediaType.AUDIO);
+            colibriMediaType = MediaType.AUDIO;
+        }
+        else
+        {
+            colibriMuteState = !chatRoom.isMemberAllowedToUnmute(toBeMutedJid, MediaType.VIDEO) &&
+                !chatRoom.isMemberAllowedToUnmute(toBeMutedJid, MediaType.DESKTOP);
+            colibriMediaType = MediaType.VIDEO;
+        }
+        getColibriSessionManager().mute(participant.getEndpointId(), colibriMuteState, colibriMediaType);
+
         return MuteResult.SUCCESS;
     }
 
@@ -1645,7 +1735,8 @@ public class JitsiMeetConferenceImpl
     /**
      * Mutes all participants (except jibri or jigasi without "audioMute" support). Will block for colibri responses.
      */
-    public void muteAllParticipants(MediaType mediaType)
+    @Override
+    public void muteAllParticipants(@NotNull MediaType mediaType, EntityFullJid actor)
     {
         Set<Participant> participantsToMute = new HashSet<>();
         synchronized (participantLock)
@@ -1659,46 +1750,60 @@ public class JitsiMeetConferenceImpl
                     continue;
                 }
 
+                // we skip the participant that enabled the av moderation
+                if (participant.getMucJid().equals(actor))
+                {
+                    continue;
+                }
+
                 participantsToMute.add(participant);
             }
         }
 
-        // Force mute at the backend. We assume this was successful. If for some reason it wasn't the colibri layer
-        // should handle it (e.g. remove a broken bridge).
-        getColibriSessionManager().mute(
-                participantsToMute.stream().map(Participant::getEndpointId).collect(Collectors.toSet()),
-                true,
-                mediaType);
+        // Sync the colibri force mute state with the AV moderation state.
+        // We assume this is successful. If for some reason it wasn't the colibri layer should handle it (e.g. remove a
+        // broken bridge).
+        MediaType colibriMediaType = mediaType == MediaType.AUDIO ? MediaType.AUDIO : MediaType.VIDEO;
+        Set<MediaType> mediaTypes = mediaType == MediaType.AUDIO
+            ? Collections.singleton(MediaType.AUDIO)
+            : EnumSet.of(MediaType.VIDEO, MediaType.DESKTOP);
+        Set<String> participantIdsToMute = new HashSet<>();
+        Set<String> participantIdsToUnmute = new HashSet<>();
+        for (Participant p : participantsToMute)
+        {
+            if (ChatRoomKt.isMemberAllowedToUnmute(chatRoom, p.getMucJid(), mediaTypes))
+            {
+                participantIdsToUnmute.add(p.getEndpointId());
+            }
+            else
+            {
+                participantIdsToMute.add(p.getEndpointId());
+            }
+        }
+
+        if (!participantIdsToMute.isEmpty())
+        {
+            getColibriSessionManager().mute(
+                    participantIdsToMute,
+                    true,
+                    colibriMediaType);
+        }
+        if (!participantIdsToUnmute.isEmpty())
+        {
+            getColibriSessionManager().mute(
+                    participantIdsToUnmute,
+                    false,
+                    colibriMediaType);
+        }
 
         // Signal to the participants that they are being muted.
         for (Participant participant : participantsToMute)
         {
-            IQ muteIq = null;
-            if (mediaType == MediaType.AUDIO)
-            {
-                MuteIq muteStatusUpdate = new MuteIq();
-                muteStatusUpdate.setType(IQ.Type.set);
-                muteStatusUpdate.setTo(participant.getMucJid());
-
-                muteStatusUpdate.setMute(true);
-
-                muteIq = muteStatusUpdate;
-            }
-            else if (mediaType == MediaType.VIDEO)
-            {
-                MuteVideoIq muteStatusUpdate = new MuteVideoIq();
-                muteStatusUpdate.setType(IQ.Type.set);
-                muteStatusUpdate.setTo(participant.getMucJid());
-
-                muteStatusUpdate.setMute(true);
-
-                muteIq = muteStatusUpdate;
-            }
-
-            if (muteIq != null)
-            {
-                UtilKt.tryToSendStanza(getClientXmppProvider().getXmppConnection(), muteIq);
-            }
+            AbstractMuteIq muteIq = createMuteIq(mediaType);
+            muteIq.setType(IQ.Type.set);
+            muteIq.setTo(participant.getMucJid());
+            muteIq.setMute(true);
+            UtilKt.tryToSendStanza(getClientXmppProvider().getXmppConnection(), muteIq);
         }
     }
 
@@ -1779,10 +1884,13 @@ public class JitsiMeetConferenceImpl
      * Checks whether a request for a new endpoint to join this conference should be redirected to a visitor node.
      * @return the name of the visitor node if it should be redirected, and null otherwise.
      */
+    @Override
     @Nullable
-    public String redirectVisitor(boolean visitorRequested)
+    public String redirectVisitor(boolean visitorRequested, @Nullable String userId, @Nullable String groupId)
         throws Exception
     {
+        logger.debug("redirectVisitor visitorRequested=" + visitorRequested + ", userId=" + userId
+            + ", groupId=" + groupId);
         if (!VisitorsConfig.config.getEnabled())
         {
             return null;
@@ -1790,20 +1898,30 @@ public class JitsiMeetConferenceImpl
 
         // We don't support both visitors and a lobby. Once a lobby is enabled we don't use visitors anymore.
         ChatRoom chatRoom = this.chatRoom;
-        if (chatRoom != null && (chatRoom.getLobbyEnabled() || Boolean.FALSE.equals(chatRoom.getVisitorsEnabled())))
+        if (chatRoom != null)
         {
-            return null;
+            if (chatRoom.getLobbyEnabled())
+            {
+                logger.debug("Lobby enabled, not redirecting.");
+                return null;
+            }
+            if (Boolean.FALSE.equals(chatRoom.getVisitorsEnabled()))
+            {
+                logger.debug("Visitors are disabled, not redirecting.");
+            }
         }
         if (VisitorsConfig.config.getRequireMucConfigFlag())
         {
             if (chatRoom == null || !Boolean.TRUE.equals(chatRoom.getVisitorsEnabled()))
             {
+                logger.debug("RequireMucConfigFlag is set, and the room does not have the flag, not redirecting.");
                 return null;
             }
         }
         // We don't support visitors in breakout rooms.
         if (mainRoomJid != null)
         {
+            logger.debug("This is a breakout room, not redirecting.");
             return null;
         }
 
@@ -1820,6 +1938,11 @@ public class JitsiMeetConferenceImpl
             participantsSoftLimit = chatRoom.getParticipantsSoftLimit();
         }
 
+        logger.debug("redirectVisitor: participantsSoftLimit=" + participantsSoftLimit
+            + ", visitorsAlreadyUsed=" + visitorsAlreadyUsed
+            + ", visitorRequested=" + visitorRequested
+            + ", participantCount=" + participantCount
+            + ", participantsSoftLimit=" + participantsSoftLimit);
         if (visitorsAlreadyUsed || visitorRequested || participantCount >= participantsSoftLimit)
         {
             return selectVisitorNode();
@@ -1868,9 +1991,10 @@ public class JitsiMeetConferenceImpl
 
     /**
      * Selects a visitor node for a new participant, and joins the associated chat room if not already joined
-     * @return
+     * @return the ID of the selected node, or null if the endpoint is to be sent to the main room.
      * @throws Exception if joining the chat room failed.
      */
+    @Nullable
     private String selectVisitorNode()
             throws Exception
     {
@@ -1936,6 +2060,7 @@ public class JitsiMeetConferenceImpl
         // properties up to date?
         presenceExtensions.add(createConferenceProperties());
 
+        this.presenceExtensions.forEach((qName, extension) -> presenceExtensions.add(extension));
         // updates presence with presenceExtensions and sends it
         chatRoomToJoin.addPresenceExtensions(presenceExtensions);
 
@@ -2259,6 +2384,37 @@ public class JitsiMeetConferenceImpl
         return config.getRtcStatsEnabled();
     }
 
+    private void setEnableTranscribing(boolean enable)
+    {
+        if (enableTranscription == enable)
+        {
+            return;
+        }
+
+        logger.info("Setting enableTranscribing=" + enable);
+        enableTranscription = enable;
+        setConferenceProperty(ConferenceProperties.KEY_AUDIO_RECORDING_ENABLED, enable ? "true" : "false");
+
+        String meetingId = JitsiMeetConferenceImpl.this.meetingId;
+        ColibriSessionManager colibriSessionManager = JitsiMeetConferenceImpl.this.colibriSessionManager;
+
+        if (meetingId == null || colibriSessionManager == null)
+        {
+            // The new value will take effect when colibriSessionManager is initialized (after the room is joined and
+            // meetingId is set).
+            return;
+        }
+
+        TemplatedUrl uri = enable ? TranscriptionConfig.config.getUrl(meetingId) : null;
+        if (enable && uri == null)
+        {
+            logger.info("Transcription enabled, but no URL is configured.");
+            return;
+        }
+
+        colibriSessionManager.setTranscriberUrl(uri);
+    }
+
     /**
      * The interface used to listen for conference events.
      */
@@ -2268,7 +2424,16 @@ public class JitsiMeetConferenceImpl
          * Event fired when conference has ended.
          * @param conference the conference instance that has ended.
          */
-        void conferenceEnded(JitsiMeetConferenceImpl conference);
+        void conferenceEnded(@NotNull JitsiMeetConferenceImpl conference);
+
+        /**
+         * Fire an event attempting to set the meeting ID for the conference. The implementation should return `false`
+         * in case another meeting with the same ID already exists, which will result in an exception.
+         * @param conference the conference.
+         * @param meetingId the meetingId to attempt.
+         * @return true if the given meetingId was free and was associated with the conference, false otherwise.
+         */
+        boolean meetingIdSet(@NotNull JitsiMeetConferenceImpl conference, @NotNull String meetingId);
     }
 
     /**
@@ -2512,6 +2677,12 @@ public class JitsiMeetConferenceImpl
         public void numVideoSendersChanged(int numVideoSenders)
         {
             onNumVideoSendersChanged(numVideoSenders);
+        }
+
+        @Override
+        public void transcribingEnabledChanged(boolean enabled)
+        {
+            setEnableTranscribing(enabled);
         }
     }
 

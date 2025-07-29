@@ -66,6 +66,9 @@ class BridgeSelector @JvmOverloads constructor(
         JicofoMetricsContainer.instance.metricsUpdater.addUpdateTask { updateMetrics() }
     }
 
+    fun hasNonOverloadedBridge(): Boolean = bridges.values.any { !it.isOverloaded }
+    fun getAll(): List<Bridge> = bridges.values.toList()
+
     val operationalBridgeCount: Int
         @Synchronized
         get() = bridges.values.count { it.isOperational && !it.isInGracefulShutdown }
@@ -112,6 +115,7 @@ class BridgeSelector @JvmOverloads constructor(
                 logger.warn("Lost a bridge: $bridgeJid")
                 lostBridges.inc()
             }
+            it.markRemoved()
             bridgeCount.dec()
             eventEmitter.fireEvent { bridgeRemoved(it) }
         }
@@ -214,10 +218,7 @@ class BridgeSelector @JvmOverloads constructor(
             conferenceBridges,
             participantProperties,
             OctoConfig.config.enabled
-        ).also {
-            // The bridge was selected for an endpoint, increment its counter.
-            it?.endpointAdded()
-        }
+        )
     }
 
     val stats: JSONObject
@@ -245,6 +246,7 @@ class BridgeSelector @JvmOverloads constructor(
         inShutdownBridgeCountMetric.set(bridges.values.count { it.isInGracefulShutdown }.toLong())
         operationalBridgeCountMetric.set(bridges.values.count { it.isOperational }.toLong())
         bridgeVersionCount.set(bridges.values.map { it.fullVersion }.toSet().size.toLong())
+        bridges.values.forEach { it.updateMetrics() }
     }
 
     companion object {

@@ -18,6 +18,7 @@
 package org.jitsi.jicofo.bridge.colibri
 
 import org.jitsi.jicofo.OctoConfig
+import org.jitsi.jicofo.TranscriptionConfig
 import org.jitsi.jicofo.bridge.Bridge
 import org.jitsi.jicofo.bridge.CascadeLink
 import org.jitsi.jicofo.bridge.CascadeNode
@@ -27,6 +28,7 @@ import org.jitsi.jicofo.conference.source.ConferenceSourceMap
 import org.jitsi.jicofo.conference.source.EndpointSourceSet
 import org.jitsi.utils.MediaType
 import org.jitsi.utils.OrderedJsonObject
+import org.jitsi.utils.TemplatedUrl
 import org.jitsi.utils.logging2.Logger
 import org.jitsi.utils.logging2.createChildLogger
 import org.jitsi.xmpp.extensions.colibri.WebSocketPacketExtension
@@ -35,6 +37,7 @@ import org.jitsi.xmpp.extensions.colibri2.Colibri2Error
 import org.jitsi.xmpp.extensions.colibri2.Colibri2Relay
 import org.jitsi.xmpp.extensions.colibri2.ConferenceModifiedIQ
 import org.jitsi.xmpp.extensions.colibri2.ConferenceModifyIQ
+import org.jitsi.xmpp.extensions.colibri2.Connect
 import org.jitsi.xmpp.extensions.colibri2.Endpoints
 import org.jitsi.xmpp.extensions.colibri2.InitialLastN
 import org.jitsi.xmpp.extensions.colibri2.Media
@@ -43,10 +46,10 @@ import org.jitsi.xmpp.extensions.colibri2.Transport
 import org.jitsi.xmpp.extensions.jingle.DtlsFingerprintPacketExtension
 import org.jitsi.xmpp.extensions.jingle.ExtmapAllowMixedPacketExtension
 import org.jitsi.xmpp.extensions.jingle.IceUdpTransportPacketExtension
-import org.jitsi.xmpp.util.XmlStringBuilderUtil.Companion.toStringOpt
 import org.jivesoftware.smack.StanzaCollector
 import org.jivesoftware.smack.packet.IQ
 import org.jivesoftware.smackx.muc.MUCRole
+import java.net.URI
 import java.util.Collections.singletonList
 import java.util.UUID
 
@@ -56,6 +59,7 @@ class Colibri2Session(
     val bridge: Bridge,
     // Whether the session was constructed for the purpose of visitor nodes
     val visitor: Boolean,
+    private var transcriberUrl: TemplatedUrl?,
     parentLogger: Logger
 ) : CascadeNode<Colibri2Session, Colibri2Session.Relay> {
     private val logger = createChildLogger(parentLogger).apply {
@@ -110,7 +114,7 @@ class Colibri2Session(
         participant.medias.forEach { endpoint.addMedia(it) }
         request.addEndpoint(endpoint.build())
 
-        logger.trace { "Sending allocation request for ${participant.id}: ${request.build().toStringOpt()}" }
+        logger.trace { "Sending allocation request for ${participant.id}: ${request.build().toXML()}" }
         created = true
         return xmppConnection.createStanzaCollectorAndSend(request.build())
     }
@@ -195,6 +199,33 @@ class Colibri2Session(
             setCreate(true)
             setConferenceName(colibriSessionManager.conferenceName)
             setRtcstatsEnabled(colibriSessionManager.rtcStatsEnabled)
+            transcriberUrl?.let {
+                val url = resolveTranscriberUrl(it)
+                logger.info("Adding connect for transcriber, url=$url")
+                addConnect(createConnect(url))
+            }
+        }
+    }
+
+    private fun resolveTranscriberUrl(urlTemplate: TemplatedUrl): URI {
+        return urlTemplate.resolve(TranscriptionConfig.REGION_TEMPLATE, bridge.region ?: "")
+    }
+
+    fun setTranscriberUrl(urlTemplate: TemplatedUrl?) {
+        if (transcriberUrl != urlTemplate) {
+            transcriberUrl = urlTemplate
+            val request = createRequest(create = false)
+            if (urlTemplate != null) {
+                val url = resolveTranscriberUrl(urlTemplate)
+                logger.info("Adding connect, url=$url")
+                request.addConnect(createConnect(url))
+            } else {
+                logger.info("Removing connects")
+                request.setEmptyConnects()
+            }
+            sendRequest(request.build(), "setTranscriberUrl")
+        } else {
+            logger.info("No change in audio record URL.")
         }
     }
 
@@ -259,7 +290,7 @@ class Colibri2Session(
         relayId: String
     ) {
         logger.info("Setting relay transport for $relayId")
-        logger.debug { "Setting relay transport for $relayId: ${transport.toStringOpt()}" }
+        logger.debug { "Setting relay transport for $relayId: ${transport.toXML()}" }
         relays[relayId]?.setTransport(transport)
             ?: throw IllegalStateException("Relay $relayId doesn't exist (bridge=${this.relayId}")
     }
@@ -292,7 +323,7 @@ class Colibri2Session(
      * failure.
      */
     private fun sendRequest(iq: IQ, name: String) {
-        logger.debug { "Sending $name request: ${iq.toStringOpt()}" }
+        logger.debug { "Sending $name request: ${iq.toXML()}" }
         xmppConnection.sendIqAndHandleResponseAsync(iq) { response ->
             if (response == null) {
                 logger.info("$name request timed out. Ignoring.")
@@ -314,12 +345,12 @@ class Colibri2Session(
                 val reInvite = reason == Colibri2Error.Reason.UNKNOWN_ENDPOINT && endpointId != null
                 if (reInvite) {
                     logger.warn(
-                        "Endpoint [$endpointId] is not found, session failed: ${error.toStringOpt()}, " +
-                            "request was: ${iq.toStringOpt()}"
+                        "Endpoint [$endpointId] is not found, session failed: ${error.toXML()}, " +
+                            "request was: ${iq.toXML()}"
                     )
                     colibriSessionManager.endpointFailed(endpointId!!)
                 } else {
-                    logger.error("Received error response for $name, session failed: ${error.toStringOpt()}")
+                    logger.error("Received error response for $name, session failed: ${error.toXML()}")
                     colibriSessionManager.sessionFailed(this@Colibri2Session)
                 }
                 return@sendIqAndHandleResponseAsync
@@ -329,7 +360,7 @@ class Colibri2Session(
                 logger.error("Received response with unexpected type ${response.javaClass.name}")
                 colibriSessionManager.sessionFailed(this@Colibri2Session)
             } else {
-                logger.debug { "Received $name response: ${response.toStringOpt()}" }
+                logger.debug { "Received $name response: ${response.toXML()}" }
             }
         }
     }
@@ -374,14 +405,14 @@ class Colibri2Session(
         /** Send a request to allocate a new relay, and submit a task to wait for a response. */
         internal fun start(initialParticipants: List<ParticipantInfo>) {
             val request = buildCreateRelayRequest(initialParticipants)
-            logger.trace { "Sending create relay: ${request.toStringOpt()}" }
+            logger.trace { "Sending create relay: ${request.toXML()}" }
 
             xmppConnection.sendIqAndHandleResponseAsync(request) { response ->
                 // Wait for a response to the relay allocation request. When a response is received, parse the contained
                 // transport and forward it to the associated [Relay] for the remote side via [colibriSessionManager]
-                logger.trace { "Received response: ${response?.toStringOpt()}" }
+                logger.trace { "Received response: ${response?.toXML()}" }
                 if (response !is ConferenceModifiedIQ) {
-                    logger.error("Received error: ${response?.toStringOpt() ?: "timeout"}")
+                    logger.error("Received error: ${response?.toXML() ?: "timeout"}")
                     colibriSessionManager.sessionFailed(this@Colibri2Session)
                     return@sendIqAndHandleResponseAsync
                 }
@@ -389,7 +420,7 @@ class Colibri2Session(
                 // TODO: We just assume that the response has a single [Colibri2Relay].
                 val transport = response.relays.firstOrNull()?.transport
                     ?: run {
-                        logger.error("No transport in response: ${response.toStringOpt()}")
+                        logger.error("No transport in response: ${response.toXML()}")
                         colibriSessionManager.sessionFailed(this@Colibri2Session)
                         return@sendIqAndHandleResponseAsync
                     }
@@ -548,4 +579,11 @@ private fun ConferenceModifyIQ.Builder.addExpire(endpointId: String) = addEndpoi
         setId(endpointId)
         setExpire(true)
     }.build()
+)
+
+private fun createConnect(url: URI) = Connect(
+    url = url,
+    type = Connect.Types.RECORDER,
+    protocol = Connect.Protocols.MEDIAJSON,
+    audio = true
 )

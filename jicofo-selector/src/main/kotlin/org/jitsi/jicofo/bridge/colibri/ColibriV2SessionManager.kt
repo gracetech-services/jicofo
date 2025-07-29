@@ -19,10 +19,11 @@
 package org.jitsi.jicofo.bridge.colibri
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings
+import org.jitsi.jicofo.MediaType
 import org.jitsi.jicofo.OctoConfig
 import org.jitsi.jicofo.TaskPools
 import org.jitsi.jicofo.bridge.Bridge
-import org.jitsi.jicofo.bridge.BridgeConfig
+import org.jitsi.jicofo.bridge.BridgeConfig.Companion.config
 import org.jitsi.jicofo.bridge.BridgeSelector
 import org.jitsi.jicofo.bridge.Cascade
 import org.jitsi.jicofo.bridge.CascadeRepair
@@ -33,8 +34,8 @@ import org.jitsi.jicofo.bridge.getNodesBehind
 import org.jitsi.jicofo.bridge.getPathsFrom
 import org.jitsi.jicofo.bridge.removeNode
 import org.jitsi.jicofo.conference.source.EndpointSourceSet
-import org.jitsi.utils.MediaType
 import org.jitsi.utils.OrderedJsonObject
+import org.jitsi.utils.TemplatedUrl
 import org.jitsi.utils.event.AsyncEventEmitter
 import org.jitsi.utils.logging2.Logger
 import org.jitsi.utils.logging2.createChildLogger
@@ -42,7 +43,6 @@ import org.jitsi.xmpp.extensions.colibri2.Colibri2Error
 import org.jitsi.xmpp.extensions.colibri2.ConferenceModifiedIQ
 import org.jitsi.xmpp.extensions.colibri2.InitialLastN
 import org.jitsi.xmpp.extensions.jingle.IceUdpTransportPacketExtension
-import org.jitsi.xmpp.util.XmlStringBuilderUtil.Companion.toStringOpt
 import org.jivesoftware.smack.AbstractXMPPConnection
 import org.jivesoftware.smack.StanzaCollector
 import org.jivesoftware.smack.packet.IQ
@@ -67,6 +67,7 @@ class ColibriV2SessionManager(
      */
     internal val meetingId: String,
     internal val rtcStatsEnabled: Boolean,
+    private var transcriberUrl: TemplatedUrl?,
     private val bridgeVersion: String?,
     parentLogger: Logger
 ) : ColibriSessionManager, Cascade<Colibri2Session, Colibri2Session.Relay> {
@@ -76,9 +77,8 @@ class ColibriV2SessionManager(
     override fun addListener(listener: ColibriSessionManager.Listener) = eventEmitter.addHandler(listener)
     override fun removeListener(listener: ColibriSessionManager.Listener) = eventEmitter.removeHandler(listener)
 
-    private val topologySelectionStrategy = BridgeConfig.config.topologyStrategy.also {
-        logger.info("Using ${it.javaClass.name}")
-    }
+    /** The session currently used for transcription, if any */
+    private var transcriberSession: Colibri2Session? = null
 
     /**
      * The colibri2 sessions that are currently active, mapped by the relayId of the [Bridge] that they use.
@@ -112,6 +112,7 @@ class ColibriV2SessionManager(
         logger.info("Expiring.")
         sessions.values.forEach { session ->
             logger.debug { "Expiring $session" }
+            session.bridge.endpointsRemoved(getSessionParticipants(session).size)
             session.expire()
         }
         sessions.clear()
@@ -123,17 +124,18 @@ class ColibriV2SessionManager(
         logger.debug { "Asked to remove $participantId" }
 
         participants[participantId]?.let {
-            logger.info("Removing ${it.id}")
+            logger.debug("Removing ${it.id}")
             removeParticipantInfosBySession(mapOf(it.session to singletonList(it)))
         } ?: logger.warn("Can not remove $participantId, no participantInfo")
         Unit
     }
 
     private fun repairMesh(cascade: ColibriV2SessionManager, disconnectedMeshes: Set<Set<Colibri2Session>>) =
-        topologySelectionStrategy.repairMesh(cascade, disconnectedMeshes)
+        config.topologyStrategy.repairMesh(cascade, disconnectedMeshes)
 
     private fun removeSession(session: Colibri2Session): Set<ParticipantInfo> {
         val participants = getSessionParticipants(session)
+        session.bridge.endpointsRemoved(participants.size)
         session.expire()
         removeNode(session, ::repairMesh)
         sessions.remove(session.relayId)
@@ -141,6 +143,15 @@ class ColibriV2SessionManager(
         participants.forEach { remove(it) }
         session.relayId?.let { removedRelayId ->
             sessions.values.forEach { otherSession -> otherSession.expireRelay(removedRelayId) }
+        }
+        if (session == transcriberSession) {
+            logger.info("Removing transcriber session: $session")
+            transcriberSession = null
+            transcriberUrl?.let {
+                // Trigger selection of a new session for transcribing.
+                transcriberUrl = null
+                setTranscriberUrl(it)
+            }
         }
         return participants.toSet()
     }
@@ -162,6 +173,7 @@ class ColibriV2SessionManager(
                 sessionRemoved = true
             } else {
                 session.expire(sessionParticipantsToRemove)
+                session.bridge.endpointRemoved()
                 sessionParticipantsToRemove.forEach { remove(it) }
                 participantsRemoved.addAll(sessionParticipantsToRemove)
 
@@ -186,6 +198,9 @@ class ColibriV2SessionManager(
     }
 
     override fun mute(participantIds: Set<String>, doMute: Boolean, mediaType: MediaType): Boolean {
+        require(mediaType == MediaType.AUDIO || mediaType == MediaType.VIDEO) {
+            "Unsupported media type: $mediaType"
+        }
         synchronized(syncRoot) {
             val participantsToMuteBySession = mutableMapOf<Colibri2Session, MutableSet<ParticipantInfo>>()
 
@@ -240,9 +255,52 @@ class ColibriV2SessionManager(
                 return Pair(session, false)
             }
 
-            session = Colibri2Session(this, bridge, visitor, logger)
+            val enableTranscriber = transcriberUrl != null && transcriberSession == null
+            session = Colibri2Session(
+                this,
+                bridge,
+                visitor,
+                if (enableTranscriber) transcriberUrl else null,
+                logger
+            )
+            if (enableTranscriber) {
+                transcriberSession = session
+            }
             return Pair(session, true)
         }
+
+    override fun setTranscriberUrl(url: TemplatedUrl?) = synchronized(syncRoot) {
+        if (transcriberUrl == url) {
+            return
+        }
+        if (transcriberUrl != null && url != null) {
+            logger.error("Changing to a different URL is not supported")
+            return
+        }
+
+        val enable = url != null
+        transcriberUrl = url
+
+        if (enable) {
+            if (transcriberSession != null) {
+                transcriberSession?.setTranscriberUrl(url)
+            } else {
+                if (sessions.isEmpty()) {
+                    logger.info("No session available for transcribing, will enable it once a session is created")
+                } else {
+                    // Use the first session.
+                    transcriberSession = sessions.values.first()
+                    logger.info("Using ${transcriberSession?.id} for transcribing")
+                    transcriberSession?.setTranscriberUrl(url)
+                }
+            }
+        } else {
+            transcriberSession?.setTranscriberUrl(null)
+            transcriberSession = null
+        }
+
+        Unit
+    }
 
     /** Get the bridge-to-bridge-properties map needed for bridge selection. */
     override fun getBridges(): Map<Bridge, ConferenceBridgeProperties> = synchronized(syncRoot) {
@@ -324,7 +382,7 @@ class ColibriV2SessionManager(
                 created = it.second
             }
             logger.info(
-                "Selected ${bridge.jid.resourceOrNull} for $${participant.id} " +
+                "Selected ${bridge.jid.resourceOrNull} for ${participant.id} " +
                     "(visitor=${participant.visitor}, session exists: ${!created})"
             )
             if (visitor != session.visitor) {
@@ -334,10 +392,11 @@ class ColibriV2SessionManager(
                 )
             }
             participantInfo = ParticipantInfo(participant, session)
+            session.bridge.endpointAdded()
             stanzaCollector = session.sendAllocationRequest(participantInfo)
             add(participantInfo)
             if (created) {
-                val topologySelectionResult = topologySelectionStrategy.connectNode(
+                val topologySelectionResult = config.topologyStrategy.connectNode(
                     this,
                     session
                 )
@@ -365,7 +424,7 @@ class ColibriV2SessionManager(
         val response: IQ?
         try {
             response = stanzaCollector.nextResult()
-            logger.trace { "Received response: ${response?.toStringOpt()}" }
+            logger.trace { "Received response: ${response?.toXML()}" }
         } finally {
             stanzaCollector.cancel()
         }
@@ -442,13 +501,13 @@ class ColibriV2SessionManager(
                 Colibri2Error.ELEMENT,
                 Colibri2Error.NAMESPACE
             )?.reason
-            logger.info("Received error response: ${response.toStringOpt()}")
+            logger.info("Received error response: ${response.toXML()}")
             when (error.condition) {
                 bad_request -> {
                     // Most probably we sent a bad request.
                     // If we flag the bridge as non-operational we may disrupt other conferences.
                     // If we trigger a re-invite we may cause the same error repeating.
-                    throw ColibriAllocationFailedException("Bad request: ${error.toStringOpt()}", false)
+                    throw ColibriAllocationFailedException("Bad request: ${error.toXML()}", false)
                 }
                 item_not_found -> {
                     if (reason == Colibri2Error.Reason.CONFERENCE_NOT_FOUND) {
@@ -467,7 +526,7 @@ class ColibriV2SessionManager(
                     if (reason == null) {
                         // An error NOT coming from the bridge.
                         throw ColibriAllocationFailedException(
-                            "XMPP error: ${error.toStringOpt()}",
+                            "XMPP error: ${error.toXML()}",
                             true
                         )
                     } else if (reason == Colibri2Error.Reason.CONFERENCE_ALREADY_EXISTS) {
@@ -480,7 +539,7 @@ class ColibriV2SessionManager(
                         // we can't expire a conference without listing its individual endpoints and we think there
                         // were none.
                         // We remove the bridge from the conference (expiring it) and re-invite the participants.
-                        throw ColibriAllocationFailedException("Colibri error: ${error.toStringOpt()}", true)
+                        throw ColibriAllocationFailedException("Colibri error: ${error.toXML()}", true)
                     }
                 }
                 service_unavailable -> {
@@ -496,7 +555,7 @@ class ColibriV2SessionManager(
                 }
                 else -> {
                     session.bridge.isOperational = false
-                    throw ColibriAllocationFailedException("Error: ${error.toStringOpt()}", true)
+                    throw ColibriAllocationFailedException("Error: ${error.toXML()}", true)
                 }
             }
         }
@@ -556,7 +615,7 @@ class ColibriV2SessionManager(
         initialLastN: InitialLastN?,
         suppressLocalBridgeUpdate: Boolean
     ) = synchronized(syncRoot) {
-        logger.info("Updating $participantId with transport=$transport, sources=$sources")
+        logger.debug("Updating $participantId with transport=$transport, sources=$sources")
 
         val participantInfo = participants[participantId]
             ?: run {
@@ -581,8 +640,9 @@ class ColibriV2SessionManager(
         }
     }
 
-    override fun getBridgeSessionId(participantId: String): String? = synchronized(syncRoot) {
-        return participants[participantId]?.session?.id
+    override fun getBridgeSessionId(participantId: String): Pair<Bridge?, String?> = synchronized(syncRoot) {
+        val session = participants[participantId]?.session
+        return Pair(session?.bridge, session?.id)
     }
 
     override fun removeBridge(bridge: Bridge): List<String> = synchronized(syncRoot) {
@@ -628,7 +688,7 @@ class ColibriV2SessionManager(
         relayId: String
     ) {
         logger.info("Received transport from $session for relay $relayId")
-        logger.debug { "Received transport from $session for relay $relayId: ${transport.toStringOpt()}" }
+        logger.debug { "Received transport from $session for relay $relayId: ${transport.toXML()}" }
         synchronized(syncRoot) {
             // It's possible a new session was started for the same bridge.
             if (!sessions.containsKey(session.bridge.relayId) || sessions[session.bridge.relayId] != session) {

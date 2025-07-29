@@ -17,8 +17,9 @@
  */
 package org.jitsi.jicofo.xmpp.muc
 
+import org.jitsi.jicofo.MediaType
+import org.jitsi.jicofo.xmpp.RoomMetadata
 import org.jitsi.jicofo.xmpp.XmppProvider
-import org.jitsi.utils.MediaType
 import org.jitsi.utils.OrderedJsonObject
 import org.jivesoftware.smack.SmackException
 import org.jivesoftware.smack.XMPPException
@@ -72,6 +73,19 @@ interface ChatRoom {
 
     /** Returns the number of members that currently have their video sources unmuted. */
     var videoSendersCount: Int
+
+    /**
+     * Whether a user with a certain ID and a certain group ID would be allowed to join the main room. Note that this
+     * does not actually perform authentication (i.e. if the user has a valid claim for the user ID and group ID),
+     * just checks the MUC configuration.
+     */
+    fun isAllowedInMainRoom(userId: String?, groupId: String?): Boolean
+
+    /**
+     * Whether a user with a certain ID and a certain group ID is preferred in the main room, i.e. is explicitly listed
+     * in the list of participants or moderators for the main room.
+     */
+    fun isPreferredInMainRoom(userId: String?, groupId: String?): Boolean
 
     /**
      * Joins this chat room with the preconfigured nickname. Returns the fields read from the MUC config form after
@@ -157,3 +171,7 @@ data class ChatRoomInfo(
     /** The JID of the main room if this is a breakout room, otherwise null. */
     val mainRoomJid: EntityBareJid?
 )
+
+/** Whether a user with a certain JID is allowed to unmute with any of [mediaTypes]. */
+fun ChatRoom.isMemberAllowedToUnmute(jid: Jid, mediaTypes: Set<MediaType>): Boolean =
+    mediaTypes.any { isMemberAllowedToUnmute(jid, it) }

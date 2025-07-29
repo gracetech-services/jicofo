@@ -10,7 +10,6 @@ import org.jitsi.jicofo.auth.XMPPDomainAuthAuthority
 import org.jitsi.jicofo.xmpp.ConferenceIqHandler
 import org.jitsi.xmpp.extensions.jitsimeet.ConferenceIq
 import org.jitsi.xmpp.extensions.jitsimeet.SessionInvalidPacketExtension
-import org.jitsi.xmpp.util.XmlStringBuilderUtil.Companion.toStringOpt
 import org.jivesoftware.smack.packet.IQ
 import org.jivesoftware.smack.packet.StanzaError.Condition
 import org.jxmpp.jid.impl.JidCreate
@@ -86,7 +85,7 @@ class XMPPDomainAuthAuthorityTest : ShouldSpec() {
         }
 
         context("CASE 3: guest domain, no session-id, room exists") {
-            every { focusManager.getConference(any()) } returns mockk()
+            every { focusManager.getConference(any()) } returns mockk(relaxed = true)
             val query = ConferenceIq().apply {
                 to = JidCreate.from("jicofo@example.com")
                 from = user2GuestJid
@@ -95,7 +94,7 @@ class XMPPDomainAuthAuthorityTest : ShouldSpec() {
                 machineUID = user2MachineUid
             }
 
-            println("query=${query.toStringOpt()}")
+            println("query=${query.toXML()}")
             conferenceIqHandler.handleConferenceIq(query).let {
                 it.shouldBeInstanceOf<ConferenceIq>()
                 it.sessionId shouldBe null
@@ -197,7 +196,7 @@ class XMPPDomainAuthAuthorityTest : ShouldSpec() {
         }
 
         context("CASE 10: same user, different machine UID - assign separate session") {
-            every { focusManager.getConference(any()) } returns mockk()
+            every { focusManager.getConference(any()) } returns mockk(relaxed = true)
             val user3MachineUID = "user3machineUID"
             val query = ConferenceIq().apply {
                 room = room3

@@ -19,19 +19,19 @@ package org.jitsi.jicofo.xmpp.muc
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings
 import org.jitsi.jicofo.JicofoConfig
+import org.jitsi.jicofo.MediaType
 import org.jitsi.jicofo.TaskPools.Companion.ioPool
 import org.jitsi.jicofo.util.PendingCount
+import org.jitsi.jicofo.xmpp.RoomMetadata
 import org.jitsi.jicofo.xmpp.XmppProvider
 import org.jitsi.jicofo.xmpp.muc.MemberRole.Companion.fromSmack
 import org.jitsi.jicofo.xmpp.sendIqAndGetResponse
 import org.jitsi.jicofo.xmpp.tryToSendStanza
-import org.jitsi.utils.MediaType
 import org.jitsi.utils.OrderedJsonObject
 import org.jitsi.utils.event.EventEmitter
 import org.jitsi.utils.event.SyncEventEmitter
 import org.jitsi.utils.logging2.createLogger
 import org.jitsi.utils.observableWhenChanged
-import org.jitsi.xmpp.util.XmlStringBuilderUtil.Companion.toStringOpt
 import org.jivesoftware.smack.PresenceListener
 import org.jivesoftware.smack.SmackException
 import org.jivesoftware.smack.XMPPConnection
@@ -59,6 +59,8 @@ import org.jxmpp.jid.Jid
 import org.jxmpp.jid.impl.JidCreate
 import org.jxmpp.jid.parts.Resourcepart
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.logging.Level
 
 @SuppressFBWarnings(
@@ -68,12 +70,12 @@ import java.util.logging.Level
 class ChatRoomImpl(
     override val xmppProvider: XmppProvider,
     override val roomJid: EntityBareJid,
-    logLevel: Level,
+    logLevel: Level?,
     /** Callback to call when the room is left. */
     private val leaveCallback: (ChatRoomImpl) -> Unit
 ) : ChatRoom, PresenceListener {
     private val logger = createLogger().apply {
-        level = logLevel
+        logLevel?.let { level = it }
         addContext("room", roomJid.toString())
     }
 
@@ -83,6 +85,8 @@ class ChatRoomImpl(
     private val pendingVisitorsCounter = PendingCount(
         JicofoConfig.config.vnodeJoinLatencyInterval
     )
+
+    private val roomMetadataLatch = CountDownLatch(1)
 
     override fun visitorInvited() {
         pendingVisitorsCounter.eventPending()
@@ -164,6 +168,39 @@ class ChatRoomImpl(
             }
         }
 
+    /**
+     * List of user IDs which the room is configured to allow to be moderators.
+     */
+    private var moderators: List<String> = emptyList()
+
+    /**
+     * List of user IDs which the room is configured to allow to be moderators.
+     * When [null], the feature is not used, meaning that the room is open to participants.
+     * When empty, the feature is used and no participants are explicitly allowed (so the room requires a token,
+     * and users without a token should be redirected as visitors.
+     */
+    private var participants: List<String>? = null
+
+    override fun isAllowedInMainRoom(userId: String?, groupId: String?): Boolean {
+        if (participants == null) {
+            // The room is open to participants.
+            return true
+        }
+        return isPreferredInMainRoom(userId, groupId)
+    }
+
+    override fun isPreferredInMainRoom(userId: String?, groupId: String?): Boolean {
+        if (userId != null && (moderators.contains(userId) || participants?.contains(userId) == true)) {
+            // The user is explicitly allowed to join the main room.
+            return true
+        }
+        if (groupId != null && (moderators.contains(groupId) || participants?.contains(groupId) == true)) {
+            // The user is explicitly allowed to join the main room based on their group ID.
+            return true
+        }
+        return false
+    }
+
     private val avModerationByMediaType = ConcurrentHashMap<MediaType, AvModerationForMediaType>()
 
     /** The emitter used to fire events. */
@@ -192,6 +229,14 @@ class ChatRoomImpl(
             this["members"] = membersJson
             this["audio_senders_count"] = audioSendersCount
             this["video_senders_count"] = videoSendersCount
+            this["lobby_enabled"] = lobbyEnabled
+            this["participants_soft_limit"] = participantsSoftLimit ?: -1
+            participants?.let {
+                this["participants"] = it
+            }
+            this["moderators"] = moderators
+            this["visitors_enabled"] = visitorsEnabled?.toString() ?: "null"
+            this["visitors_live"] = visitorsLive
             this["av_moderation"] = OrderedJsonObject().apply {
                 avModerationByMediaType.forEach { (k, v) -> this[k.toString()] = v.debugState }
             }
@@ -203,7 +248,6 @@ class ChatRoomImpl(
     // Use toList to avoid concurrent modification. TODO: add a removeAll to EventEmitter.
     override fun removeAllListeners() = eventEmitter.eventHandlers.toList().forEach { eventEmitter.removeHandler(it) }
 
-    /** In practice we only use AUDIO and VIDEO, so polluting the map is not a problem. */
     private fun avModeration(mediaType: MediaType): AvModerationForMediaType =
         avModerationByMediaType.computeIfAbsent(mediaType) { AvModerationForMediaType(mediaType) }
     override fun isAvModerationEnabled(mediaType: MediaType) = avModeration(mediaType).enabled
@@ -217,10 +261,6 @@ class ChatRoomImpl(
     override fun getChatMember(occupantJid: EntityFullJid) = membersMap[occupantJid]
     override fun isMemberAllowedToUnmute(jid: Jid, mediaType: MediaType): Boolean =
         avModeration(mediaType).isAllowedToUnmute(jid)
-
-    internal fun setStartMuted(startAudioMuted: Boolean, startVideoMuted: Boolean) = eventEmitter.fireEvent {
-        startMutedChanged(startAudioMuted, startVideoMuted)
-    }
 
     @Throws(SmackException::class, XMPPException::class, InterruptedException::class)
     override fun join(): ChatRoomInfo {
@@ -245,7 +285,7 @@ class ChatRoomImpl(
         }
         synchronized(this) {
             lastPresenceSent = null
-            logger.addContext("meeting_id", "")
+            logger.removeContext("meeting_id")
             avModerationByMediaType.values.forEach { it.reset() }
         }
     }
@@ -264,12 +304,6 @@ class ChatRoomImpl(
         val config = muc.configurationForm
         parseConfigForm(config)
 
-        // We only read the initial metadata from the config form. Setting room metadata after a config form reload may
-        // race with updates coming via [RoomMetadataHandler].
-        config.getRoomMetadata()?.let {
-            setRoomMetadata(it)
-        }
-
         // Make the room non-anonymous, so that others can recognize focus JID
         val answer = config.fillableForm
         answer.setAnswer(MucConfigFields.WHOIS, "anyone")
@@ -282,6 +316,15 @@ class ChatRoomImpl(
             null
         }
 
+        if (config.getField(MucConfigFields.CONFERENCE_PRESET_ENABLED)?.firstValue?.toBoolean() == true) {
+            logger.info("Conference presets service is enabled. Will block until RoomMetadata is set.")
+            if (roomMetadataLatch.await(10, TimeUnit.SECONDS)) {
+                logger.info("RoomMetadata is set, room is fully joined.")
+            } else {
+                logger.warn("Timed out waiting for RoomMetadata to be set. Will continue without it.")
+            }
+        }
+
         return ChatRoomInfo(
             meetingId = config.getField(MucConfigFields.MEETING_ID)?.firstValue,
             mainRoomJid = if (mainRoomStr == null) null else JidCreate.entityBareFrom(mainRoomStr)
@@ -290,26 +333,40 @@ class ChatRoomImpl(
 
     override fun setRoomMetadata(roomMetadata: RoomMetadata) {
         visitorsLive = roomMetadata.metadata?.visitors?.live == true
+        moderators = roomMetadata.metadata?.moderators ?: emptyList()
+        participants = roomMetadata.metadata?.participants
+        // We read these fields from both the config form (for backwards compatibility) and the room metadata. Only
+        // override if they are set.
+        roomMetadata.metadata?.visitorsEnabled?.let {
+            visitorsEnabled = it
+        }
+        roomMetadata.metadata?.participantsSoftLimit?.let {
+            participantsSoftLimit = it
+        }
+        roomMetadata.metadata?.startMuted?.let {
+            eventEmitter.fireEvent { startMutedChanged(it.audio == true, it.video == true) }
+        }
+        eventEmitter.fireEvent {
+            transcribingEnabledChanged(
+                roomMetadata.metadata?.recording?.isTranscribingEnabled == true &&
+                    roomMetadata.metadata.asyncTranscription == true
+            )
+        }
+        roomMetadataLatch.countDown()
     }
 
     /** Read the fields we care about from [configForm] and update local state. */
     private fun parseConfigForm(configForm: Form) {
         lobbyEnabled =
             configForm.getField(MucConfigFormManager.MUC_ROOMCONFIG_MEMBERSONLY)?.firstValue?.toBoolean() ?: false
-        visitorsEnabled = configForm.getField(MucConfigFields.VISITORS_ENABLED)?.firstValue?.toBoolean()
-        participantsSoftLimit = configForm.getField(MucConfigFields.PARTICIPANTS_SOFT_LIMIT)?.firstValue?.toInt()
-    }
-
-    private fun Form.getRoomMetadata(): RoomMetadata? {
-        getField("muc#roominfo_jitsimetadata")?.firstValue?.let {
-            try {
-                return RoomMetadata.parse(it)
-            } catch (e: Exception) {
-                logger.warn("Invalid room metadata content", e)
-                return null
-            }
+        // We read these fields from both the config form (for backwards compatibility) and the room metadata. Only
+        // override if they are set.
+        configForm.getField(MucConfigFields.VISITORS_ENABLED)?.firstValue?.let {
+            visitorsEnabled = it.toBoolean()
         }
-        return null
+        configForm.getField(MucConfigFields.PARTICIPANTS_SOFT_LIMIT)?.firstValue?.let {
+            participantsSoftLimit = it.toInt()
+        }
     }
 
     override fun leave() {
@@ -563,15 +620,15 @@ class ChatRoomImpl(
      */
     override fun processPresence(presence: Presence?) {
         if (presence == null || presence.error != null) {
-            logger.warn("Unable to handle packet: ${presence?.toXML()?.toStringOpt()}")
+            logger.warn("Unable to handle packet: ${presence?.toXML()}")
             return
         }
-        logger.trace { "Presence received ${presence.toXML().toStringOpt()}" }
+        logger.trace { "Presence received ${presence.toXML()}" }
 
         // Should never happen, but log if something is broken
         val myOccupantJid = this.myOccupantJid
         if (myOccupantJid == null) {
-            logger.error("Processing presence when myOccupantJid is not set: ${presence.toXML().toStringOpt()}")
+            logger.error("Processing presence when myOccupantJid is not set: ${presence.toXML()}")
         }
         if (myOccupantJid != null && myOccupantJid.equals(presence.from)) {
             processOwnPresence(presence)
@@ -595,6 +652,7 @@ class ChatRoomImpl(
         const val WHOIS = "muc#roomconfig_whois"
         const val PARTICIPANTS_SOFT_LIMIT = "muc#roominfo_participantsSoftLimit"
         const val VISITORS_ENABLED = "muc#roominfo_visitorsEnabled"
+        const val CONFERENCE_PRESET_ENABLED = "muc#roominfo_conference_presets_service_enabled"
     }
 
     private inner class MemberListener {
