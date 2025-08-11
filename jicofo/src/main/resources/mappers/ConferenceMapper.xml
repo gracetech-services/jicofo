@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+  PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.jitsi.jicofo.db.mapper.ConferenceMapper">
+  
+  <resultMap id="ConferenceResultMap" type="ConferenceInfo">
+    <id property="id" column="id"/>
+    <result property="roomName" column="room_name"/>
+    <result property="meetingId" column="meeting_id"/>
+    <result property="createdAt" column="created_at"/>
+    <result property="started" column="started"/>
+    <result property="endedAt" column="ended_at"/>
+    <result property="includeInStatistics" column="include_in_statistics"/>
+    <result property="jvbVersion" column="jvb_version"/>
+    <result property="participantCount" column="participant_count"/>
+  </resultMap>
+  
+  <!-- 复杂查询可以在这里定义 -->
+  <select id="selectConferencesWithStats" resultMap="ConferenceResultMap">
+    SELECT c.*, 
+           COUNT(DISTINCT p.user_id) as participant_count,
+           AVG(TIMESTAMPDIFF(MINUTE, p.joined_at, COALESCE(p.left_at, NOW()))) as avg_duration
+    FROM conferences c
+    LEFT JOIN conference_participants p ON c.room_name = p.room_name
+    WHERE c.created_at >= #{startTime} AND c.created_at <= #{endTime}
+    GROUP BY c.id
+    ORDER BY c.created_at DESC
+  </select>
+  
+</mapper>

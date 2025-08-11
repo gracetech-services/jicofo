@@ -25,6 +25,8 @@ import org.jitsi.jicofo.auth.*;
 import org.jitsi.jicofo.bridge.*;
 import org.jitsi.jicofo.bridge.colibri.*;
 import org.jitsi.jicofo.conference.source.*;
+import org.jitsi.jicofo.db.OperationLogger;
+import org.jitsi.jicofo.storage.ConferenceDataManager;
 import org.jitsi.jicofo.util.*;
 import org.jitsi.jicofo.version.*;
 import org.jitsi.jicofo.visitors.*;
@@ -79,7 +81,7 @@ import static org.jitsi.jicofo.xmpp.MuteIqHandlerKt.createMuteIq;
 public class JitsiMeetConferenceImpl
     implements JitsiMeetConference, XmppProvider.Listener
 {
-
+    private OperationLogger operationLogger = OperationLogger.getInstance();
     /**
      * Status used by participants when they are switching from a room to a breakout room.
      */
@@ -811,6 +813,20 @@ public class JitsiMeetConferenceImpl
             {
                 room += chatRoomMember.getChatRoom().getRoomJid();
             }
+
+            Map<String, Object> context = LoggerContextUtil.getLoggerContext(logger);
+            String meet_id = (String)context.get("meeting_id");
+            String room_id = (String)context.get("room");
+            operationLogger.logJoinConference(chatRoomMember.getName(), room_id,"");
+            String logInfo = "Member joined:" + chatRoomMember.getName() + " stats-id=" + chatRoomMember.getStatsId()
+                    + " region=" + chatRoomMember.getRegion()
+                    + " audioMuted=" + chatRoomMember.isAudioMuted()
+                    + " videoMuted=" + chatRoomMember.isVideoMuted()
+                    + " role=" + chatRoomMember.getRole()
+                    + " isJibri=" + chatRoomMember.isJibri()
+                    + " isJigasi=" + chatRoomMember.isJigasi()
+                    + " isTranscriber=" + chatRoomMember.isTranscriber()
+                    + room;
             logger.info(
                     "Member joined:" + chatRoomMember.getName()
                             + " stats-id=" + chatRoomMember.getStatsId()

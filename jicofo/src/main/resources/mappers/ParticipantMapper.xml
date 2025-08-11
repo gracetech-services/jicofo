@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+  PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.jitsi.jicofo.db.mapper.ParticipantMapper">
+  
+  <resultMap id="ParticipantResultMap" type="ParticipantInfo">
+    <id property="id" column="id"/>
+    <result property="userId" column="user_id"/>
+    <result property="roomName" column="room_name"/>
+    <result property="meetingId" column="meeting_id"/>
+    <result property="role" column="role"/>
+    <result property="audioMuted" column="audio_muted"/>
+    <result property="videoMuted" column="video_muted"/>
+    <result property="featuresStr" column="features"/>
+    <result property="joinedAt" column="joined_at"/>
+    <result property="leftAt" column="left_at"/>
+  </resultMap>
+  
+  <!-- 批量插入参会人员 -->
+  <insert id="batchInsertParticipants" parameterType="list">
+    INSERT INTO conference_participants 
+    (user_id, room_name, meeting_id, role, audio_muted, video_muted, features, joined_at)
+    VALUES
+    <foreach collection="list" item="participant" separator=",">
+      (#{participant.userId}, #{participant.roomName}, #{participant.meetingId}, 
+       #{participant.role}, #{participant.audioMuted}, #{participant.videoMuted}, 
+       #{participant.featuresStr}, #{participant.joinedAt})
+    </foreach>
+  </insert>
+  
+</mapper>

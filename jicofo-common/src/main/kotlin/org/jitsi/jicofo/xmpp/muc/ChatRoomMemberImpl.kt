@@ -117,7 +117,7 @@ class ChatRoomMemberImpl(
             sourceInfos.filter { it.mediaType == MediaType.AUDIO }.none { !it.muted }
         }
         if (isAudioMuted != wasAudioMuted) {
-            logger.debug { "isAudioMuted = $isAudioMuted" }
+            logger.info { "isAudioMuted = $isAudioMuted" }
             if (isAudioMuted) chatRoom.audioSendersCount-- else chatRoom.audioSendersCount++
         }
 
@@ -129,7 +129,7 @@ class ChatRoomMemberImpl(
             sourceInfos.filter { it.mediaType == MediaType.VIDEO }.none { !it.muted }
         }
         if (isVideoMuted != wasVideoMuted) {
-            logger.debug { "isVideoMuted = $isVideoMuted" }
+            logger.info { "isVideoMuted = $isVideoMuted" }
             if (isVideoMuted) chatRoom.videoSendersCount-- else chatRoom.videoSendersCount++
         }
     }
