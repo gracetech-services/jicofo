@@ -16,13 +16,13 @@ class DbConfig private constructor() {
     val usrName: String by config {
         "jicofo.db.username".from(newConfig)
     }
-    val maximumPoolSize : Int by config {
+    val maxPoolSize : Int by config {
         "jicofo.db.max-pool-size".from(newConfig)
     }
-    val minimumPoolSize : Int by config {
+    val minPoolSize : Int by config {
         "jicofo.db.min-pool-size".from(newConfig)
     }
-    val minimumIdle : Int by config {
+    val minIdle : Int by config {
         "jicofo.db.min-idle".from(newConfig)
     }
     val connectionTimeout : Long by config {

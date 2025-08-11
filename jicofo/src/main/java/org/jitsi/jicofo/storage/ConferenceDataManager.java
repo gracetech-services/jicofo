@@ -18,9 +18,9 @@ public class ConferenceDataManager {
     private static final Logger logger = new LoggerImpl(ConferenceDataManager.class.getName());
     private static ConferenceDataManager instance;
     
-//    // 内存缓存
-//    private final Map<String, ConferenceInfo> conferences = new ConcurrentHashMap<>();
-//    private final Map<String, List<ParticipantInfo>> conferenceParticipants = new ConcurrentHashMap<>();
+    // 内存缓存
+    private final Map<String, ConferenceInfo> conferences = new ConcurrentHashMap<>();
+    private final Map<String, List<ParticipantInfo>> conferenceParticipants = new ConcurrentHashMap<>();
     
     private ConferenceDataManager() {}
     
@@ -37,14 +37,14 @@ public class ConferenceDataManager {
     public void storeConferenceInfo(JitsiMeetConferenceImpl conference) {
         String roomName = conference.getRoomName().toString();
         String meetingId = conference.getMeetingId();
-        
+        if(roomName.startsWith("__jicofo-health-check")){
+            return;
+        }
         ConferenceInfo info = new ConferenceInfo(
             roomName,
             meetingId,
-            conference.getCreatedInstant(),
             conference.isStarted(),
-            conference.includeInStatistics(),
-            conference.getJvbVersion()
+            conference.includeInStatistics()
         );
         
         conferences.put(roomName, info);
@@ -52,7 +52,7 @@ public class ConferenceDataManager {
         // 使用MyBatis存储到数据库
         DatabaseManager.getInstance().executeConferenceOperation(mapper -> {
             int result = mapper.insertConference(info);
-            logger.info("Stored conference info: room={}, meetingId={}, result={}", roomName, meetingId, result);
+            logger.info("Stored conference info: room="+ roomName +", meetingId="+meetingId+" , result=" + result);
             return result;
         });
     }
@@ -82,8 +82,7 @@ public class ConferenceDataManager {
         // 使用MyBatis存储到数据库
         DatabaseManager.getInstance().executeParticipantOperation(mapper -> {
             int result = mapper.insertParticipant(info);
-            logger.info("Stored participant info: user={}, room={}, meetingId={}, result={}", 
-                info.getUserId(), roomName, meetingId, result);
+            logger.info("Stored participant info: user=" + info.getUserId()+", room="+ roomName +", meetingId="+meetingId+" , result=" + result);
             return result;
         });
     }
@@ -94,8 +93,7 @@ public class ConferenceDataManager {
     public void updateParticipantMediaStatus(String roomName, String userId, boolean audioMuted, boolean videoMuted) {
         DatabaseManager.getInstance().executeParticipantOperation(mapper -> {
             int result = mapper.updateParticipantMediaStatus(userId, roomName, audioMuted, videoMuted);
-            logger.debug("Updated participant media status: user={}, room={}, audio={}, video={}, result={}", 
-                userId, roomName, audioMuted, videoMuted, result);
+            logger.info("Updated participant media status: user="+ userId + ", room="+roomName+ ", audio="+audioMuted+", video="+ videoMuted+", result=" + result);
             return result;
         });
     }
@@ -150,7 +148,7 @@ public class ConferenceDataManager {
         // 更新数据库中的离开时间
         DatabaseManager.getInstance().executeParticipantOperation(mapper -> {
             int result = mapper.updateParticipantLeftTime(userId, roomName, new Timestamp(System.currentTimeMillis()));
-            logger.info("Updated participant left time: user={}, room={}, result={}", userId, roomName, result);
+            logger.info("Updated participant left time: user=" + userId+", room=" + roomName+", result=" + result);
             return result;
         });
     }
@@ -177,8 +175,7 @@ public class ConferenceDataManager {
                     participantMapper.updateParticipantLeftTime(participant.getUserId(), roomName, endTime);
                 }
                 
-                logger.info("Removed conference: room={}, participantCount={}, result={}", 
-                    roomName, participantCount, conferenceResult);
+                logger.info("Removed conference: room="+roomName+", participantCount="+participantCount+", result="+conferenceResult);
                 return conferenceResult;
             });
         }
@@ -215,7 +212,7 @@ public class ConferenceDataManager {
             for (ParticipantInfo participant : participants) {
                 totalResult += mapper.insertParticipant(participant);
             }
-            logger.info("Batch stored {} participants, total result: {}", participants.size(), totalResult);
+            logger.info("Batch stored "+participants.size()+"participants, total result: " +totalResult);
             return totalResult;
         });
     }

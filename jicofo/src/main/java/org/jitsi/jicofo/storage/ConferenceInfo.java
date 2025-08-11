@@ -1,7 +1,7 @@
 package org.jitsi.jicofo.storage;
 
-import java.time.Instant;
-import java.sql.Timestamp;
+
+import java.time.LocalDateTime;
 
 /**
  * 会议信息数据模型
@@ -10,23 +10,23 @@ public class ConferenceInfo {
     private Long id;
     private String roomName;
     private String meetingId;
-    private Instant createdAt;
     private boolean started;
-    private Instant endedAt;
+    private LocalDateTime endedAt;
     private boolean includeInStatistics;
     private String jvbVersion;
     private int participantCount;
+    private LocalDateTime createTime;
+    private LocalDateTime updateTime;
     
     public ConferenceInfo() {}
     
-    public ConferenceInfo(String roomName, String meetingId, Instant createdAt, 
-                         boolean started, boolean includeInStatistics, String jvbVersion) {
+    public ConferenceInfo(String roomName, String meetingId,
+                         boolean started, boolean includeInStatistics) {
         this.roomName = roomName;
         this.meetingId = meetingId;
-        this.createdAt = createdAt;
         this.started = started;
         this.includeInStatistics = includeInStatistics;
-        this.jvbVersion = jvbVersion;
+
     }
     
     // Getters and Setters
@@ -38,15 +38,11 @@ public class ConferenceInfo {
     
     public String getMeetingId() { return meetingId; }
     public void setMeetingId(String meetingId) { this.meetingId = meetingId; }
-    
-    public Instant getCreatedAt() { return createdAt; }
-    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
-    
+
+
     public boolean isStarted() { return started; }
     public void setStarted(boolean started) { this.started = started; }
-    
-    public Instant getEndedAt() { return endedAt; }
-    public void setEndedAt(Instant endedAt) { this.endedAt = endedAt; }
+
     
     public boolean isIncludeInStatistics() { return includeInStatistics; }
     public void setIncludeInStatistics(boolean includeInStatistics) { this.includeInStatistics = includeInStatistics; }
@@ -56,13 +52,32 @@ public class ConferenceInfo {
     
     public int getParticipantCount() { return participantCount; }
     public void setParticipantCount(int participantCount) { this.participantCount = participantCount; }
-    
-    // MyBatis需要的Timestamp转换方法
-    public Timestamp getCreatedAtTimestamp() {
-        return createdAt != null ? Timestamp.from(createdAt) : null;
+
+
+
+
+    public LocalDateTime getEndedAt() {
+        return endedAt;
     }
-    
-    public Timestamp getEndedAtTimestamp() {
-        return endedAt != null ? Timestamp.from(endedAt) : null;
+
+    public void setEndedAt(LocalDateTime endedAt) {
+        this.endedAt = endedAt;
     }
+
+    public LocalDateTime getCreateTime() {
+        return createTime;
+    }
+
+    public void setCreateTime(LocalDateTime createTime) {
+        this.createTime = createTime;
+    }
+
+    public LocalDateTime getUpdateTime() {
+        return updateTime;
+    }
+
+    public void setUpdateTime(LocalDateTime updateTime) {
+        this.updateTime = updateTime;
+    }
+
 }

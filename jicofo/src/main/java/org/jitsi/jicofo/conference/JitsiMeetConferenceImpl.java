@@ -317,7 +317,7 @@ public class JitsiMeetConferenceImpl
                 );
                 return null;
             });
-
+        ConferenceDataManager.getInstance().storeConferenceInfo(this);
         logger.info("Created new conference.");
     }
 

@@ -2,9 +2,13 @@ package org.jitsi.jicofo.db;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import org.apache.ibatis.mapping.Environment;
+import org.apache.ibatis.session.Configuration;
 import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.apache.ibatis.session.SqlSessionFactoryBuilder;
+import org.apache.ibatis.transaction.TransactionFactory;
+import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
 import org.jetbrains.annotations.NotNull;
 import org.jitsi.jicofo.db.mapper.ConferenceMapper;
 import org.jitsi.jicofo.db.mapper.ParticipantMapper;
@@ -14,7 +18,6 @@ import org.jitsi.utils.logging2.Logger;
 import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 
 import static org.jitsi.jicofo.DbConfig.config;
 
@@ -44,8 +47,8 @@ public class DatabaseManager {
             String jdbcUrl = config.getDbUrl();
             String username = config.getUsrName();
             String password = config.getPassword();
-            int maximumPoolSize = config.getMaximumPoolSize();
-            int minimumIdle = config.getMinimumIdle();
+            int maximumPoolSize = config.getMaxPoolSize();
+            int minimumIdle = config.getMinIdle();
             long connectionTimeout = config.getConnectionTimeout();
             long idleTimeout = config.getIdleTimeout();
             long maxLifetime = config.getMaxLifetime();
@@ -81,10 +84,17 @@ public class DatabaseManager {
         try {
             InputStream inputStream = getClass().getClassLoader().getResourceAsStream("mybatis-config.xml");
             sqlSessionFactory = new SqlSessionFactoryBuilder().build(inputStream);
-            
-            // 设置数据源
-            sqlSessionFactory.getConfiguration().getEnvironment().setDataSource(dataSource);
-            
+            // 3. 创建事务工厂
+            TransactionFactory transactionFactory = new JdbcTransactionFactory();
+            // 4. 创建 MyBatis 环境
+            Environment environment = new Environment(
+                    "development",
+                    transactionFactory,
+                    dataSource
+            );
+            Configuration configuration = sqlSessionFactory.getConfiguration();
+            configuration.setEnvironment(environment);
+
             logger.info("MyBatis initialized successfully");
         } catch (Exception e) {
             logger.error("Failed to initialize MyBatis", e);
@@ -179,7 +189,7 @@ public class DatabaseManager {
 
     // 保留原有的日志方法
     public void logUserOperation(String userId, String roomId, String meetingId, String operationType, String data) {
-        String sql = "INSERT INTO user_operations (user_id, room_id, meeting_id, operation_type, operation_data, create_time) VALUES (?, ?, ?, ?, ?, NOW())";
+        String sql = "INSERT INTO jicofo_user_operations (user_id, room_id, meeting_id, operation_type, operation_data) VALUES (?, ?, ?, ?, ?)";
         try (Connection conn = dataSource.getConnection();
              java.sql.PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, userId);
